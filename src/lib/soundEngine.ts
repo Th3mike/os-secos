@@ -1,90 +1,119 @@
-import { SoundEffect } from '@/types/community'
+export type RoomSoundEvent =
+  | 'user-join'
+  | 'user-leave'
+  | 'stream-start'
+  | 'stream-stop'
+  | 'mic-on'
+  | 'mic-off'
 
-export const COMMUNITY_SOUNDS: SoundEffect[] = [
-  { id: 'horn', label: 'Buzina Seca', emoji: '📢', color: 'from-amber-500 to-orange-600' },
-  { id: 'clutch', label: 'Win / GG', emoji: '🏆', color: 'from-emerald-500 to-teal-600' },
-  { id: 'rip', label: 'Foi de Base', emoji: '💀', color: 'from-rose-500 to-red-700' },
-  { id: 'suspense', label: 'Tensão', emoji: '👀', color: 'from-purple-500 to-indigo-700' },
-  { id: 'cricket', label: 'Secura Total', emoji: '🦗', color: 'from-lime-500 to-green-700' },
-  { id: 'alert', label: 'Acorda Seco!', emoji: '🚨', color: 'from-sky-500 to-blue-700' },
-]
+export interface SoundSettings {
+  enabled: boolean
+  volume: number // 0 to 1
+  joinLeaveSounds: boolean
+  streamSounds: boolean
+}
 
-export function playSynthesizedSound(soundId: string, volume = 0.35) {
-  if (typeof window === 'undefined') return
-  const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-  if (!AudioCtx) return
+const STORAGE_KEY = 'os-secos-sound-settings'
 
-  const ctx = new AudioCtx()
-  const now = ctx.currentTime
+export const DEFAULT_SOUND_SETTINGS: SoundSettings = {
+  enabled: true,
+  volume: 0.5,
+  joinLeaveSounds: true,
+  streamSounds: true,
+}
 
-  const makeOsc = (
-    type: OscillatorType,
-    freqStart: number,
-    freqEnd: number,
-    startTime: number,
-    duration: number,
-    gainVal = volume
-  ) => {
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    osc.type = type
-    osc.frequency.setValueAtTime(freqStart, startTime)
-    if (freqEnd !== freqStart) {
-      osc.frequency.exponentialRampToValueAtTime(Math.max(freqEnd, 20), startTime + duration)
-    }
-    gain.gain.setValueAtTime(gainVal, startTime)
-    gain.gain.exponentialRampToValueAtTime(0.001, startTime + duration)
-    osc.connect(gain)
-    gain.connect(ctx.destination)
-    osc.start(startTime)
-    osc.stop(startTime + duration)
-  }
-
-  switch (soundId) {
-    case 'horn': {
-      // Airhorn chord
-      makeOsc('sawtooth', 440, 435, now, 0.45, volume * 0.6)
-      makeOsc('sawtooth', 554.37, 550, now, 0.45, volume * 0.6)
-      makeOsc('sawtooth', 659.25, 655, now, 0.55, volume * 0.6)
-      break
-    }
-    case 'clutch': {
-      // Victory arpeggio
-      const notes = [523.25, 659.25, 783.99, 1046.5]
-      notes.forEach((n, idx) => {
-        makeOsc('triangle', n, n, now + idx * 0.09, 0.25, volume * 0.8)
-      })
-      break
-    }
-    case 'rip': {
-      // Sad trombone descending
-      makeOsc('sawtooth', 392, 370, now, 0.28, volume * 0.6)
-      makeOsc('sawtooth', 369.99, 349, now + 0.3, 0.28, volume * 0.6)
-      makeOsc('sawtooth', 349.23, 330, now + 0.6, 0.28, volume * 0.6)
-      makeOsc('sawtooth', 329.63, 220, now + 0.9, 0.65, volume * 0.7)
-      break
-    }
-    case 'suspense': {
-      // Dramatic impact
-      makeOsc('sawtooth', 146.83, 73.42, now, 0.8, volume * 0.9)
-      makeOsc('sine', 110, 55, now, 0.9, volume)
-      break
-    }
-    case 'cricket': {
-      // Chirp chirp
-      for (let i = 0; i < 4; i++) {
-        makeOsc('sine', 4200, 4500, now + i * 0.06, 0.04, volume * 0.4)
-        makeOsc('sine', 4200, 4500, now + 0.45 + i * 0.06, 0.04, volume * 0.4)
-      }
-      break
-    }
-    case 'alert': {
-      // Siren
-      makeOsc('square', 600, 1200, now, 0.25, volume * 0.5)
-      makeOsc('square', 1200, 600, now + 0.25, 0.25, volume * 0.5)
-      makeOsc('square', 600, 1200, now + 0.5, 0.25, volume * 0.5)
-      break
-    }
+export function loadSoundSettings(): SoundSettings {
+  if (typeof window === 'undefined') return DEFAULT_SOUND_SETTINGS
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return DEFAULT_SOUND_SETTINGS
+    return { ...DEFAULT_SOUND_SETTINGS, ...JSON.parse(raw) }
+  } catch {
+    return DEFAULT_SOUND_SETTINGS
   }
 }
 
+export function saveSoundSettings(settings: SoundSettings) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings))
+}
+
+export function playRoomEventSound(event: RoomSoundEvent, settings?: SoundSettings) {
+  if (typeof window === 'undefined') return
+  const cfg = settings || loadSoundSettings()
+  if (!cfg.enabled || cfg.volume <= 0) return
+
+  if ((event === 'user-join' || event === 'user-leave') && !cfg.joinLeaveSounds) return
+  if ((event === 'stream-start' || event === 'stream-stop') && !cfg.streamSounds) return
+
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+  if (!AudioCtx) return
+
+  try {
+    const ctx = new AudioCtx()
+    const now = ctx.currentTime
+    const vol = Math.min(Math.max(cfg.volume * 0.35, 0.01), 0.6)
+
+    const tone = (
+      freqStart: number,
+      freqEnd: number,
+      startOffset: number,
+      duration: number,
+      type: OscillatorType = 'sine',
+      gainMult = 1
+    ) => {
+      const osc = ctx.createOscillator()
+      const gain = ctx.createGain()
+      osc.type = type
+      osc.frequency.setValueAtTime(freqStart, now + startOffset)
+      if (freqEnd !== freqStart) {
+        osc.frequency.exponentialRampToValueAtTime(freqEnd, now + startOffset + duration)
+      }
+      gain.gain.setValueAtTime(vol * gainMult, now + startOffset)
+      gain.gain.exponentialRampToValueAtTime(0.001, now + startOffset + duration)
+      osc.connect(gain)
+      gain.connect(ctx.destination)
+      osc.start(now + startOffset)
+      osc.stop(now + startOffset + duration)
+    }
+
+    switch (event) {
+      case 'user-join':
+        // Clean rising 2-note chime (like Discord join)
+        tone(587.33, 587.33, 0, 0.11, 'sine', 0.8) // D5
+        tone(880, 880, 0.09, 0.18, 'sine', 0.9) // A5
+        break
+
+      case 'user-leave':
+        // Clean falling 2-note chime (like Discord leave)
+        tone(783.99, 783.99, 0, 0.11, 'sine', 0.8) // G5
+        tone(523.25, 523.25, 0.09, 0.18, 'sine', 0.7) // C5
+        break
+
+      case 'stream-start':
+        // Crisp 3-note stream online cue
+        tone(523.25, 523.25, 0, 0.08, 'triangle', 0.8)
+        tone(659.25, 659.25, 0.07, 0.08, 'triangle', 0.85)
+        tone(1046.5, 1046.5, 0.14, 0.22, 'triangle', 1)
+        break
+
+      case 'stream-stop':
+        // Subtle descending stream end cue
+        tone(659.25, 523.25, 0, 0.14, 'triangle', 0.75)
+        tone(440, 349.23, 0.11, 0.18, 'triangle', 0.7)
+        break
+
+      case 'mic-on':
+        tone(660, 880, 0, 0.08, 'sine', 0.5)
+        break
+
+      case 'mic-off':
+        tone(660, 440, 0, 0.09, 'sine', 0.5)
+        break
+    }
+  } catch {
+    // Ignore autoplay restriction before user interaction
+  }
+}

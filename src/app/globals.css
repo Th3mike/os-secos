@@ -5,13 +5,28 @@
 }
 
 body {
-  background-color: #09090b;
-  color: #fafafa;
+  background-color: #111214;
+  color: #f2f3f5;
   font-family: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
-  overflow-x: hidden;
+  margin: 0;
+  padding: 0;
 }
 
-/* Custom sleek scrollbar */
+button,
+select,
+input[type="checkbox"],
+input[type="range"],
+label,
+a,
+[role="button"] {
+  cursor: pointer;
+}
+
+button:disabled,
+select:disabled {
+  cursor: not-allowed;
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -22,10 +37,10 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 9999px;
+  background: #2b2d31;
+  border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.25);
+  background: #3f4147;
 }

@@ -1,8 +1,6 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { motion } from 'framer-motion'
-import { Maximize2, Volume2, VolumeX, PictureInPicture2, Radio } from 'lucide-react'
 import { UserProfile } from '@/types/community'
 
 interface VideoStageProps {
@@ -41,8 +39,8 @@ export function VideoStage({ stream, user, isLocal = false, deafened = false }: 
       } else {
         await videoRef.current.requestPictureInPicture()
       }
-    } catch (e) {
-      console.error('PiP error:', e)
+    } catch {
+      // Ignore PiP error if not supported
     }
   }
 
@@ -65,29 +63,63 @@ export function VideoStage({ stream, user, isLocal = false, deafened = false }: 
   }
 
   return (
-    <motion.div
+    <div
       ref={containerRef}
-      initial={{ opacity: 0, scale: 0.96 }}
-      animate={{ opacity: 1, scale: 1 }}
-      transition={{ duration: 0.25 }}
-      className="group relative overflow-hidden rounded-2xl border border-white/10 bg-zinc-950 shadow-2xl ring-1 ring-white/5"
+      className="flex flex-col overflow-hidden rounded-lg border border-[#26282c] bg-[#0b0c0e]"
     >
-      {/* Top Floating Badge */}
-      <div className="pointer-events-none absolute top-3 left-3 right-3 z-10 flex items-center justify-between">
-        <div className="flex items-center gap-2 rounded-full border border-white/10 bg-zinc-950/80 px-3 py-1.5 backdrop-blur-md">
+      {/* Clean Header Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1e2024] bg-[#16171a] px-3 py-2">
+        <div className="flex items-center gap-2">
           <img
             src={user.avatar_url}
             alt={user.username}
-            className="h-5 w-5 rounded-full object-cover ring-1 ring-amber-400/50"
+            className="h-5 w-5 rounded-full object-cover"
           />
-          <span className="text-xs font-semibold text-white">
-            {user.username} {isLocal && '(Você)'}
+          <span className="text-xs font-semibold text-zinc-100">
+            {user.username} {isLocal ? '(Você)' : ''}
+          </span>
+          <span className="rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
+            AO VIVO
           </span>
         </div>
 
-        <div className="flex items-center gap-1.5 rounded-full bg-red-500/90 px-2.5 py-1 text-[10px] font-bold tracking-wider text-white uppercase shadow-lg shadow-red-500/30">
-          <Radio className="h-3 w-3 animate-pulse" />
-          AO VIVO
+        <div className="flex items-center gap-2">
+          {!isLocal && (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={toggleMute}
+                className="cursor-pointer rounded bg-[#23252a] px-2 py-1 text-[11px] font-medium text-zinc-200 hover:bg-[#2f3238]"
+              >
+                {muted || deafened ? 'Som: Mudo' : 'Som: Ativo'}
+              </button>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.05"
+                value={muted || deafened ? 0 : volume}
+                onChange={handleVolume}
+                className="h-1.5 w-20 cursor-pointer accent-zinc-200"
+                title="Volume da transmissão"
+              />
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={handlePiP}
+            className="cursor-pointer rounded bg-[#23252a] px-2 py-1 text-[11px] font-medium text-zinc-300 hover:bg-[#2f3238] hover:text-white"
+          >
+            Janela
+          </button>
+          <button
+            type="button"
+            onClick={handleFullscreen}
+            className="cursor-pointer rounded bg-[#23252a] px-2 py-1 text-[11px] font-medium text-zinc-300 hover:bg-[#2f3238] hover:text-white"
+          >
+            Tela Cheia
+          </button>
         </div>
       </div>
 
@@ -99,54 +131,6 @@ export function VideoStage({ stream, user, isLocal = false, deafened = false }: 
         muted={isLocal || muted || deafened}
         className="aspect-video w-full bg-black object-contain"
       />
-
-      {/* Bottom Floating Controls on Hover */}
-      <div className="absolute right-3 bottom-3 left-3 z-10 flex items-center justify-between rounded-xl border border-white/10 bg-zinc-950/80 px-3.5 py-2 opacity-0 backdrop-blur-md transition-opacity duration-200 group-hover:opacity-100">
-        <div className="flex items-center gap-2.5">
-          {!isLocal ? (
-            <>
-              <button
-                onClick={toggleMute}
-                className="rounded-lg p-1.5 text-zinc-300 transition hover:bg-white/10 hover:text-white"
-              >
-                {muted || deafened ? (
-                  <VolumeX className="h-4 w-4 text-rose-400" />
-                ) : (
-                  <Volume2 className="h-4 w-4 text-emerald-400" />
-                )}
-              </button>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                value={muted || deafened ? 0 : volume}
-                onChange={handleVolume}
-                className="h-1 w-20 cursor-pointer accent-amber-500"
-              />
-            </>
-          ) : (
-            <span className="text-xs text-zinc-400">Sua transmissão (áudio local mutado)</span>
-          )}
-        </div>
-
-        <div className="flex items-center gap-1.5">
-          <button
-            onClick={handlePiP}
-            className="rounded-lg p-1.5 text-zinc-300 transition hover:bg-white/10 hover:text-white"
-            title="Janela Flutuante (PiP)"
-          >
-            <PictureInPicture2 className="h-4 w-4" />
-          </button>
-          <button
-            onClick={handleFullscreen}
-            className="rounded-lg p-1.5 text-zinc-300 transition hover:bg-white/10 hover:text-white"
-            title="Tela Cheia"
-          >
-            <Maximize2 className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-    </motion.div>
+    </div>
   )
 }

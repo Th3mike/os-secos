@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client'
-import { UserProfile, SignalPayload, SoundTriggerPayload, Room } from '@/types/community'
-import { playSynthesizedSound } from '@/lib/soundEngine'
+import { UserProfile, SignalPayload } from '@/types/community'
+import { playRoomEventSound } from '@/lib/soundEngine'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
 const ICE_SERVERS: RTCConfiguration = {
@@ -28,15 +28,11 @@ export interface RemoteAudioItem {
 
 export interface ScreenShareOptions {
   resolution: '720p' | '1080p' | '1440p'
-  fps: 30 | 60
+  fps: 30 | 60 | 120
   includeAudio: boolean
 }
 
-export function useScreenShare(
-  roomId: string,
-  currentUser: UserProfile | null,
-  onCustomRoomReceived?: (room: Room) => void
-) {
+export function useScreenShare(roomId: string, currentUser: UserProfile | null) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const [isSharing, setIsSharing] = useState(false)
   const [remoteStreams, setRemoteStreams] = useState<RemoteStreamItem[]>([])
@@ -46,7 +42,6 @@ export function useScreenShare(
   const [deafened, setDeafened] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [speakingPeers, setSpeakingPeers] = useState<Record<string, boolean>>({})
-  const [lastSound, setLastSound] = useState<SoundTriggerPayload | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const localStreamRef = useRef<MediaStream | null>(null)
@@ -56,6 +51,8 @@ export function useScreenShare(
   const channelRef = useRef<RealtimeChannel | null>(null)
   const bcRef = useRef<BroadcastChannel | null>(null)
   const audioAnalyserIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const knownPeersRef = useRef<Set<string>>(new Set())
+  const initialPresenceSyncedRef = useRef(false)
 
   useEffect(() => {
     deafenedRef.current = deafened
@@ -67,7 +64,13 @@ export function useScreenShare(
       pc.close()
       pcsRef.current.delete(peerId)
     }
-    setRemoteStreams((prev) => prev.filter((item) => item.peerId !== peerId))
+    setRemoteStreams((prev) => {
+      const hadStream = prev.some((item) => item.peerId === peerId)
+      if (hadStream && !deafenedRef.current) {
+        playRoomEventSound('stream-stop')
+      }
+      return prev.filter((item) => item.peerId !== peerId)
+    })
     setRemoteAudios((prev) => prev.filter((item) => item.peerId !== peerId))
   }, [])
 
@@ -115,6 +118,9 @@ export function useScreenShare(
         if (hasVideo) {
           setRemoteStreams((prev) => {
             const exists = prev.some((s) => s.peerId === targetPeerId)
+            if (!exists && !deafenedRef.current) {
+              playRoomEventSound('stream-start')
+            }
             if (exists) {
               return prev.map((s) =>
                 s.peerId === targetPeerId ? { peerId: targetPeerId, user: targetUser, stream } : s
@@ -123,7 +129,6 @@ export function useScreenShare(
             return [...prev, { peerId: targetPeerId, user: targetUser, stream }]
           })
         } else {
-          // Voice-only stream
           setRemoteAudios((prev) => {
             const exists = prev.some((s) => s.peerId === targetPeerId)
             if (exists) {
@@ -190,7 +195,6 @@ export function useScreenShare(
 
       try {
         if (payload.type === 'request-stream') {
-          // Ensure peer is in roomPeers list for local BroadcastChannel mode
           setRoomPeers((prev) => {
             if (prev.some((p) => p.id === payload.fromUser.id)) return prev
             return [...prev, payload.fromUser]
@@ -238,30 +242,20 @@ export function useScreenShare(
             ...prev,
             [payload.from]: Boolean(payload.isSpeaking),
           }))
-        } else if (payload.type === 'soundboard' && payload.soundId) {
-          if (!deafenedRef.current) {
-            playSynthesizedSound(payload.soundId)
-          }
-          setLastSound({
-            soundId: payload.soundId,
-            fromUser: payload.fromUser.username,
-            timestamp: Date.now(),
-          })
-        } else if (payload.type === 'room-created' && payload.room) {
-          onCustomRoomReceived?.(payload.room)
         }
       } catch (err) {
         console.error('WebRTC Signal Error:', err)
       }
     },
-    [currentUser, createPeerConnection, cleanupPeer, sendSignal, onCustomRoomReceived]
+    [currentUser, createPeerConnection, cleanupPeer, sendSignal]
   )
 
-  // Connect to room signaling (Supabase Realtime or BroadcastChannel fallback)
   useEffect(() => {
     if (!currentUser || !roomId) return
 
     const pcsMap = pcsRef.current
+    knownPeersRef.current = new Set([currentUser.id])
+    initialPresenceSyncedRef.current = false
 
     if (isSupabaseConfigured()) {
       const supabase = createClient()
@@ -276,9 +270,34 @@ export function useScreenShare(
         .on('presence', { event: 'sync' }, () => {
           const state = channel.presenceState<UserProfile>()
           const users: UserProfile[] = []
+          const nextIds = new Set<string>()
+
           Object.values(state).forEach((presences) => {
-            if (presences[0]) users.push(presences[0])
+            if (presences[0]) {
+              users.push(presences[0])
+              nextIds.add(presences[0].id)
+            }
           })
+
+          if (initialPresenceSyncedRef.current && !deafenedRef.current) {
+            // Detect someone joining
+            for (const id of nextIds) {
+              if (id !== currentUser.id && !knownPeersRef.current.has(id)) {
+                playRoomEventSound('user-join')
+                break
+              }
+            }
+            // Detect someone leaving
+            for (const id of knownPeersRef.current) {
+              if (id !== currentUser.id && !nextIds.has(id)) {
+                playRoomEventSound('user-leave')
+                break
+              }
+            }
+          }
+
+          knownPeersRef.current = nextIds
+          initialPresenceSyncedRef.current = true
           setRoomPeers(users)
         })
         .on('broadcast', { event: 'webrtc-signal' }, ({ payload }) => {
@@ -290,6 +309,9 @@ export function useScreenShare(
               ...currentUser,
               status: localStreamRef.current ? 'streaming' : 'online',
             })
+            if (!deafenedRef.current) {
+              playRoomEventSound('user-join')
+            }
             channel.send({
               type: 'broadcast',
               event: 'webrtc-signal',
@@ -312,29 +334,6 @@ export function useScreenShare(
         supabase.removeChannel(channel)
         channelRef.current = null
       }
-    } else {
-      const bc = new BroadcastChannel(`os-secos-room-${roomId}`)
-      bcRef.current = bc
-      setRoomPeers([currentUser])
-
-      bc.onmessage = (event) => {
-        handleSignal(event.data as SignalPayload)
-      }
-
-      bc.postMessage({
-        type: 'request-stream',
-        from: currentUser.id,
-        fromUser: currentUser,
-      } satisfies SignalPayload)
-
-      return () => {
-        pcsMap.forEach((pc) => pc.close())
-        pcsMap.clear()
-        setRemoteStreams([])
-        setRemoteAudios([])
-        bc.close()
-        bcRef.current = null
-      }
     }
   }, [roomId, currentUser, handleSignal])
 
@@ -345,6 +344,9 @@ export function useScreenShare(
     }
     setLocalStream(null)
     setIsSharing(false)
+    if (!deafenedRef.current) {
+      playRoomEventSound('stream-stop')
+    }
 
     pcsRef.current.forEach((pc) => pc.close())
     pcsRef.current.clear()
@@ -360,7 +362,6 @@ export function useScreenShare(
       }
     }
 
-    // If mic is still active, re-offer voice stream
     if (micStreamRef.current) {
       setTimeout(() => {
         renegotiateAllPeers()
@@ -402,6 +403,9 @@ export function useScreenShare(
         localStreamRef.current = stream
         setLocalStream(stream)
         setIsSharing(true)
+        if (!deafenedRef.current) {
+          playRoomEventSound('stream-start')
+        }
 
         if (channelRef.current) {
           await channelRef.current.track({ ...currentUser, status: 'streaming' })
@@ -425,6 +429,7 @@ export function useScreenShare(
         micStreamRef.current = null
         setMicEnabled(false)
         setIsSpeaking(false)
+        playRoomEventSound('mic-off')
         if (audioAnalyserIntervalRef.current) {
           clearInterval(audioAnalyserIntervalRef.current)
           audioAnalyserIntervalRef.current = null
@@ -447,9 +452,11 @@ export function useScreenShare(
         micStreamRef.current = audioStream
         setMicEnabled(true)
         setDeafened(false)
+        playRoomEventSound('mic-on')
 
-        // Setup voice activity detector (speaking green ring)
-        const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
         if (AudioCtx) {
           const audioCtx = new AudioCtx()
           const source = audioCtx.createMediaStreamSource(audioStream)
@@ -487,40 +494,6 @@ export function useScreenShare(
     setDeafened((prev) => !prev)
   }, [])
 
-  const triggerSoundboard = useCallback(
-    (soundId: string) => {
-      if (!currentUser) return
-      if (!deafenedRef.current) {
-        playSynthesizedSound(soundId)
-      }
-      setLastSound({
-        soundId,
-        fromUser: currentUser.username,
-        timestamp: Date.now(),
-      })
-      sendSignal({
-        type: 'soundboard',
-        from: currentUser.id,
-        fromUser: currentUser,
-        soundId,
-      })
-    },
-    [currentUser, sendSignal]
-  )
-
-  const broadcastNewRoom = useCallback(
-    (room: Room) => {
-      if (!currentUser) return
-      sendSignal({
-        type: 'room-created',
-        from: currentUser.id,
-        fromUser: currentUser,
-        room,
-      })
-    },
-    [currentUser, sendSignal]
-  )
-
   return {
     localStream,
     isSharing,
@@ -531,13 +504,10 @@ export function useScreenShare(
     deafened,
     isSpeaking,
     speakingPeers,
-    lastSound,
     error,
     startScreenShare,
     stopScreenShare,
     toggleMic,
     toggleDeafen,
-    triggerSoundboard,
-    broadcastNewRoom,
   }
 }
