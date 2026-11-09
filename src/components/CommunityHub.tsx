@@ -96,9 +96,9 @@ export function CommunityHub() {
   const [memberRoles, setMemberRoles] = useState<Record<string, string | null>>({})
   const [allMembers, setAllMembers] = useState<UserProfile[]>([])
 
-  // Active Text Channel vs Active Voice Channel (like Discord)
-  const [selectedChannel, setSelectedChannel] = useState<Room>(FALLBACK_CHANNELS[2]) // Resenha Geral
-  const [activeVoiceRoom, setActiveVoiceRoom] = useState<Room>(FALLBACK_CHANNELS[2])
+  // Active Text Channel vs Active Voice Channel (null = disconnected from voice, like Discord)
+  const [selectedChannel, setSelectedChannel] = useState<Room>(FALLBACK_CHANNELS[2])
+  const [activeVoiceRoom, setActiveVoiceRoom] = useState<Room | null>(FALLBACK_CHANNELS[2])
 
   // Unread messages badge map: { [channelId]: count }
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({})
@@ -298,7 +298,6 @@ export function CommunityHub() {
 
   const handleSelectChannel = (ch: Room) => {
     setSelectedChannel(ch)
-    // Clear unread badge for this channel
     if (ch.type === 'text') {
       setUnreadCounts((prev) => ({ ...prev, [ch.id]: 0 }))
     } else if (ch.type === 'voice') {
@@ -309,7 +308,23 @@ export function CommunityHub() {
     }
   }
 
+  const handleDisconnectVoice = () => {
+    if (isSharing) {
+      stopScreenShare()
+    }
+    playRoomEventSound('user-leave', soundSettings)
+    setActiveVoiceRoom(null)
+    setVoiceChatOpen(false)
+    // Switch view to first text channel when disconnecting from call
+    const firstText = channels.find((c) => c.type === 'text')
+    if (firstText) {
+      setSelectedChannel(firstText)
+      setUnreadCounts((prev) => ({ ...prev, [firstText.id]: 0 }))
+    }
+  }
+
   const handleToggleVoiceChat = () => {
+    if (!activeVoiceRoom) return
     setVoiceChatOpen((prev) => {
       const next = !prev
       if (next) {
@@ -432,7 +447,7 @@ export function CommunityHub() {
     stopScreenShare,
     toggleMic,
     toggleDeafen,
-  } = useScreenShare(activeVoiceRoom.id, user)
+  } = useScreenShare(activeVoiceRoom?.id || '', user)
 
   const allStreams = [
     ...(localStream && user ? [{ id: 'local', user, stream: localStream, isLocal: true }] : []),
@@ -483,7 +498,7 @@ export function CommunityHub() {
     )
   }
 
-  const voiceUnread = unreadCounts[activeVoiceRoom.id] || 0
+  const voiceUnread = activeVoiceRoom ? unreadCounts[activeVoiceRoom.id] || 0 : 0
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#313338] text-[#f2f3f5]">
@@ -554,7 +569,6 @@ export function CommunityHub() {
                         : 'font-medium text-[#949ba4] hover:bg-[#35373c] hover:text-[#dbdee1]'
                     }`}
                   >
-                    {/* Left white unread pill like Discord */}
                     {unread > 0 && !isSelected && (
                       <span className="absolute left-0 h-2 w-1 rounded-r bg-white" />
                     )}
@@ -603,7 +617,7 @@ export function CommunityHub() {
             <div className="space-y-1">
               {voiceChannels.map((room) => {
                 const isSelected = selectedChannel.id === room.id
-                const isConnectedHere = activeVoiceRoom.id === room.id
+                const isConnectedHere = activeVoiceRoom?.id === room.id
                 const roomUnread = unreadCounts[room.id] || 0
 
                 return (
@@ -708,41 +722,54 @@ export function CommunityHub() {
           </div>
         </div>
 
-        {/* Discord Voice Connected Status Panel */}
-        <div className="border-t border-[#1f2023] bg-[#232428] px-3 py-2">
-          <div className="flex items-center justify-between">
-            <div
-              onClick={() => setSelectedChannel(activeVoiceRoom)}
-              className="cursor-pointer min-w-0"
-            >
-              <div className="text-[11px] font-bold text-[#23a55a]">Voz Conectada</div>
-              <div className="truncate text-[10px] text-[#949ba4]">
-                {activeVoiceRoom.name}
+        {/* Discord Voice Connected Status Panel (only shown when connected to a voice room) */}
+        {activeVoiceRoom && (
+          <div className="border-t border-[#1f2023] bg-[#232428] px-3 py-2">
+            <div className="flex items-center justify-between gap-1">
+              <div
+                onClick={() => setSelectedChannel(activeVoiceRoom)}
+                className="cursor-pointer min-w-0"
+              >
+                <div className="text-[11px] font-bold text-[#23a55a]">Voz Conectada</div>
+                <div className="truncate text-[10px] text-[#949ba4]">
+                  {activeVoiceRoom.name}
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1">
+                {!isSharing ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedChannel(activeVoiceRoom)
+                      startScreenShare({ resolution, fps, includeAudio: true })
+                    }}
+                    className="cursor-pointer rounded bg-[#2b2d31] px-2 py-1 text-[10px] font-semibold text-white hover:bg-[#35373c]"
+                  >
+                    Tela
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={stopScreenShare}
+                    className="cursor-pointer rounded bg-[#da373c] px-2 py-1 text-[10px] font-semibold text-white hover:bg-[#a1282c]"
+                  >
+                    Parar
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleDisconnectVoice}
+                  className="cursor-pointer rounded bg-[#da373c]/20 px-2 py-1 text-[10px] font-bold text-[#da373c] hover:bg-[#da373c] hover:text-white"
+                  title="Desconectar da Sala de Voz"
+                >
+                  Sair da Call
+                </button>
               </div>
             </div>
-
-            {!isSharing ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedChannel(activeVoiceRoom)
-                  startScreenShare({ resolution, fps, includeAudio: true })
-                }}
-                className="cursor-pointer rounded bg-[#2b2d31] px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-[#35373c]"
-              >
-                Tela
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={stopScreenShare}
-                className="cursor-pointer rounded bg-[#da373c] px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-[#a1282c]"
-              >
-                Parar
-              </button>
-            )}
           </div>
-        </div>
+        )}
 
         {/* Discord Bottom User Profile Bar */}
         {user && (
@@ -813,7 +840,6 @@ export function CommunityHub() {
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Stage Size Slider when watching a stream */}
             {selectedChannel.type === 'voice' && allStreams.length > 0 && (
               <div className="hidden items-center gap-2 rounded bg-[#1e1f22] px-2.5 py-1 text-[11px] text-[#b5bac1] sm:flex">
                 <span>Tamanho:</span>
@@ -976,7 +1002,7 @@ export function CommunityHub() {
               )}
             </div>
 
-            {selectedChannel.type === 'voice' && (
+            {selectedChannel.type === 'voice' && activeVoiceRoom && (
               <button
                 type="button"
                 onClick={handleToggleVoiceChat}
@@ -1012,7 +1038,7 @@ export function CommunityHub() {
               onClick={handleLogout}
               className="cursor-pointer rounded bg-[#1e1f22] px-2.5 py-1 text-xs text-zinc-400 hover:bg-[#35373c] hover:text-white"
             >
-              Sair
+              Logout
             </button>
           </div>
         </header>
@@ -1040,7 +1066,6 @@ export function CommunityHub() {
             {/* Main Discord Call Stage Area */}
             <div className="flex flex-1 flex-col overflow-y-auto p-4 gap-3">
               {allStreams.length === 0 ? (
-                /* CENTERED Flex-Wrap Cards when no one is sharing screen! */
                 <div className="flex flex-1 flex-wrap items-center justify-center content-center gap-4 p-4">
                   {roomPeers.map((peer) => {
                     const talking =
@@ -1085,7 +1110,6 @@ export function CommunityHub() {
                   })}
                 </div>
               ) : activeFocusedStream ? (
-                /* Focused Adjustable Stage + Centered Participant Strip Below */
                 <div className="flex flex-1 flex-col gap-3 overflow-hidden">
                   <div
                     style={{ height: `${stageHeightPct}%` }}
@@ -1135,7 +1159,6 @@ export function CommunityHub() {
                   </div>
                 </div>
               ) : (
-                /* Multi-stream Grid */
                 <div className="grid flex-1 grid-cols-1 gap-3 md:grid-cols-2">
                   {allStreams.map((item) => (
                     <VideoStage
@@ -1212,13 +1235,22 @@ export function CommunityHub() {
                   </span>
                 )}
               </button>
+
+              <button
+                type="button"
+                onClick={handleDisconnectVoice}
+                className="cursor-pointer rounded-full bg-[#da373c] px-4 py-2 text-xs font-bold text-white hover:bg-[#a1282c]"
+                title="Sair da Sala de Voz"
+              >
+                Desconectar
+              </button>
             </div>
           </>
         )}
       </div>
 
-      {/* RIGHT VOICE CHAT DRAWER (when in voice channel and toggled) */}
-      {selectedChannel.type === 'voice' && voiceChatOpen && user && (
+      {/* RIGHT VOICE CHAT DRAWER */}
+      {selectedChannel.type === 'voice' && activeVoiceRoom && voiceChatOpen && user && (
         <ChatPanel
           roomId={activeVoiceRoom.id}
           roomName={activeVoiceRoom.name}
