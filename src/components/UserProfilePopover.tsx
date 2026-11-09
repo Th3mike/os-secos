@@ -10,6 +10,11 @@ interface UserProfilePopoverProps {
   isOnline: boolean
   currentVoiceRoomName?: string | null
   canPrank: boolean
+  isSelf?: boolean
+  userVolume?: number
+  userMuted?: boolean
+  onChangeUserVolume?: (userId: string, volume: number) => void
+  onToggleUserMute?: (userId: string) => void
   onToggleRole: (userId: string, roleId: string) => void
   onTriggerPrank: (type: PrankType, target: UserProfile) => void
   onClose: () => void
@@ -50,6 +55,11 @@ export function UserProfilePopover({
   isOnline,
   currentVoiceRoomName,
   canPrank,
+  isSelf = false,
+  userVolume = 1,
+  userMuted = false,
+  onChangeUserVolume,
+  onToggleUserMute,
   onToggleRole,
   onTriggerPrank,
   onClose,
@@ -115,6 +125,51 @@ export function UserProfilePopover({
                 {formatJoinDate(member.joined_at)}
               </div>
             </div>
+
+            {/* Individual User Volume & Mute Control (Discord Style 0% - 200%) */}
+            {!isSelf && onChangeUserVolume && (
+              <div className="border-t border-[#2b2d31] pt-2.5">
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="text-[10px] font-bold tracking-wider text-[#b5bac1] uppercase">
+                    Volume do Usuário
+                  </span>
+                  <span className="text-xs font-extrabold text-white">
+                    {userMuted ? 'Mutado (0%)' : `${Math.round(userVolume * 100)}%`}
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={2}
+                  step={0.05}
+                  value={userMuted ? 0 : userVolume}
+                  onChange={(e) => onChangeUserVolume(member.id, parseFloat(e.target.value))}
+                  className="h-1.5 w-full cursor-pointer accent-[#5865f2]"
+                />
+                <div className="mt-2 flex items-center justify-between gap-2">
+                  {onToggleUserMute && (
+                    <button
+                      type="button"
+                      onClick={() => onToggleUserMute(member.id)}
+                      className={`flex-1 cursor-pointer rounded py-1.5 text-[11px] font-bold transition ${
+                        userMuted
+                          ? 'bg-[#da373c] text-white hover:bg-[#a1282c]'
+                          : 'bg-[#2b2d31] text-zinc-200 hover:bg-[#35373c]'
+                      }`}
+                    >
+                      {userMuted ? '🔇 Desmutar Usuário' : '🔊 Silenciar Usuário'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => onChangeUserVolume(member.id, 1)}
+                    className="cursor-pointer rounded bg-[#2b2d31] px-2.5 py-1.5 text-[11px] font-semibold text-zinc-300 hover:bg-[#35373c] hover:text-white"
+                  >
+                    100%
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* Multiple Roles Selector (Discord Style Pill Checkboxes) */}
             <div className="border-t border-[#2b2d31] pt-2.5">

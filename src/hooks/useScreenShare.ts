@@ -235,6 +235,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const micSettingsRef = useRef<MicAudioSettings>(micSettings)
   const micEnabledRef = useRef(false)
   const deafenedRef = useRef(false)
+  const micWasEnabledBeforeDeafenRef = useRef(false)
   const myWatchingIdsRef = useRef<string[]>([])
   const watchStateRef = useRef<WatchTogetherState | null>(null)
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
@@ -1081,6 +1082,9 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         }
 
         micStreamRef.current = outboundStream
+        micEnabledRef.current = true
+        deafenedRef.current = false
+        micWasEnabledBeforeDeafenRef.current = false
         setMicEnabled(true)
         setDeafened(false)
         playRoomEventSound('mic-on')
@@ -1110,28 +1114,90 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
   const toggleDeafen = useCallback(() => {
     const me = currentUserRef.current
-    setDeafened((prev) => {
-      const next = !prev
+    const nextDeafened = !deafenedRef.current
+    deafenedRef.current = nextDeafened
+    setDeafened(nextDeafened)
+
+    if (nextDeafened) {
+      // Discord behavior: muting audio (Deafen) also mutes the microphone immediately!
+      if (micEnabledRef.current && micStreamRef.current) {
+        micWasEnabledBeforeDeafenRef.current = true
+        micStreamRef.current.getTracks().forEach((track) => {
+          pcsRef.current.forEach((pc) => {
+            const sender = pc.getSenders().find((s) => s.track?.id === track.id)
+            if (sender) pc.removeTrack(sender)
+          })
+          track.stop()
+        })
+        rawMicStreamRef.current?.getTracks().forEach((t) => t.stop())
+        rawMicStreamRef.current = null
+        micStreamRef.current = null
+        micAudioCtxRef.current?.close().catch(() => {})
+        micAudioCtxRef.current = null
+        micEnabledRef.current = false
+        setMicEnabled(false)
+        setIsSpeaking(false)
+        if (audioAnalyserIntervalRef.current) {
+          clearInterval(audioAnalyserIntervalRef.current)
+          audioAnalyserIntervalRef.current = null
+        }
+        if (me) {
+          sendSignal({
+            type: 'speaking-state',
+            from: me.id,
+            fromUser: me,
+            isSpeaking: false,
+          })
+        }
+      } else {
+        micWasEnabledBeforeDeafenRef.current = false
+      }
+      playRoomEventSound('mic-off')
+
+      if (me) {
+        sendSignal({
+          type: 'mute-state',
+          from: me.id,
+          fromUser: me,
+          isMuted: true,
+          isDeafened: true,
+        })
+        if (channelRef.current) {
+          channelRef.current.track({
+            ...me,
+            status: localStreamRef.current ? 'streaming' : 'online',
+            isMuted: true,
+            isDeafened: true,
+          })
+        }
+      }
+    } else {
+      // Un-deafening: if mic was active before deafening, re-activate it automatically!
+      if (micWasEnabledBeforeDeafenRef.current && !micEnabledRef.current) {
+        micWasEnabledBeforeDeafenRef.current = false
+        toggleMic()
+        return
+      }
+      playRoomEventSound('mic-on')
       if (me) {
         sendSignal({
           type: 'mute-state',
           from: me.id,
           fromUser: me,
           isMuted: !micEnabledRef.current,
-          isDeafened: next,
+          isDeafened: false,
         })
         if (channelRef.current) {
           channelRef.current.track({
             ...me,
             status: localStreamRef.current ? 'streaming' : 'online',
             isMuted: !micEnabledRef.current,
-            isDeafened: next,
+            isDeafened: false,
           })
         }
       }
-      return next
-    })
-  }, [sendSignal])
+    }
+  }, [sendSignal, toggleMic])
 
   const triggerPrank = useCallback(
     (type: PrankType, targetUser: UserProfile) => {

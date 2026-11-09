@@ -115,6 +115,7 @@ function RemoteVoicePlayer({
   const feedbackGainRef = useRef<GainNode | null>(null)
   const lfoOscRef = useRef<OscillatorNode | null>(null)
   const lfoGainRef = useRef<GainNode | null>(null)
+  const masterGainRef = useRef<GainNode | null>(null)
 
   useEffect(() => {
     if (!audioRef.current || !item.stream) return
@@ -152,14 +153,20 @@ function RemoteVoicePlayer({
       lfoOscRef.current = lfoOsc
       lfoGainRef.current = lfoGain
 
-      // Connect graph: source -> filter -> destination AND filter -> delay -> feedback -> delay -> destination
+      const masterGain = ctx.createGain()
+      masterGain.gain.value = 1
+      masterGainRef.current = masterGain
+
+      // Connect graph: source -> filter -> masterGain -> destination AND filter -> delay -> feedback -> delay -> masterGain
       source.connect(filter)
-      filter.connect(ctx.destination)
+      filter.connect(masterGain)
 
       filter.connect(delay)
       delay.connect(feedback)
       feedback.connect(delay)
-      delay.connect(ctx.destination)
+      delay.connect(masterGain)
+
+      masterGain.connect(ctx.destination)
 
       // Mute raw HTMLAudioElement so we only hear the WebAudio DSP output
       audioRef.current.muted = true
@@ -225,8 +232,14 @@ function RemoteVoicePlayer({
   }, [voiceEffect])
 
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = muted ? 0 : Math.min(Math.max(volume, 0), 1)
+    const safeVol = muted ? 0 : Math.min(Math.max(volume, 0), 2)
+    if (masterGainRef.current) {
+      if (audioCtxRef.current?.state === 'suspended') {
+        audioCtxRef.current.resume().catch(() => {})
+      }
+      masterGainRef.current.gain.value = safeVol
+    } else if (audioRef.current) {
+      audioRef.current.volume = Math.min(safeVol, 1)
     }
   }, [volume, muted])
 
@@ -285,6 +298,38 @@ export function CommunityHub() {
   const [userVoiceEffects, setUserVoiceEffects] = useState<
     Record<string, { type: PrankType; expiresAt: number }>
   >({})
+
+  // Per-user audio volume (0 to 2.0 = 0% to 200%, Discord style) & local mute
+  const [peerVolumes, setPeerVolumes] = useState<Record<string, number>>(() => {
+    if (typeof window === 'undefined') return {}
+    try {
+      const raw = localStorage.getItem('os_secos_peer_volumes_v1')
+      return raw ? JSON.parse(raw) : {}
+    } catch {
+      return {}
+    }
+  })
+  const [peerLocalMuted, setPeerLocalMuted] = useState<Record<string, boolean>>({})
+
+  const handleChangePeerVolume = (peerId: string, vol: number) => {
+    const clamped = Math.min(Math.max(vol, 0), 2)
+    setPeerVolumes((prev) => {
+      const next = { ...prev, [peerId]: clamped }
+      try {
+        localStorage.setItem('os_secos_peer_volumes_v1', JSON.stringify(next))
+      } catch {
+        // ignore
+      }
+      return next
+    })
+    if (clamped > 0 && peerLocalMuted[peerId]) {
+      setPeerLocalMuted((prev) => ({ ...prev, [peerId]: false }))
+    }
+  }
+
+  const handleTogglePeerLocalMute = (peerId: string) => {
+    setPeerLocalMuted((prev) => ({ ...prev, [peerId]: !prev[peerId] }))
+  }
 
   // Stream, Watch Together & UI Controls (Persisted so quality & FPS never reset!)
   const [resolution, setResolution] = useState<ScreenShareOptions['resolution']>(
@@ -926,7 +971,7 @@ export function CommunityHub() {
         onComplete={() => setActivePrank(null)}
       />
 
-      {/* User Profile Card Popover with Multi-Roles */}
+      {/* User Profile Card Popover with Multi-Roles & Individual Volume */}
       {inspectedMember && (
         <UserProfilePopover
           member={
@@ -944,22 +989,31 @@ export function CommunityHub() {
             activeVoiceRoom &&
               roomPeers.some((p) => p.id === inspectedMember.id)
           )}
+          isSelf={inspectedMember.id === user?.id}
+          userVolume={peerVolumes[inspectedMember.id] ?? 1}
+          userMuted={Boolean(peerLocalMuted[inspectedMember.id])}
+          onChangeUserVolume={handleChangePeerVolume}
+          onToggleUserMute={handleTogglePeerLocalMute}
           onToggleRole={handleToggleRole}
           onTriggerPrank={triggerPrank}
           onClose={() => setInspectedMember(null)}
         />
       )}
 
-      {/* Hidden Audio Players with Real-Time WebAudio Voice Filters */}
-      {remoteAudios.map((item) => (
-        <RemoteVoicePlayer
-          key={item.peerId}
-          item={item}
-          muted={deafened}
-          volume={soundSettings.volume}
-          voiceEffect={userVoiceEffects[item.peerId]?.type || null}
-        />
-      ))}
+      {/* Hidden Audio Players with Real-Time WebAudio Voice Filters & Per-User Volume (0% - 200%) */}
+      {remoteAudios.map((item) => {
+        const individualVol = peerVolumes[item.peerId] ?? 1
+        const isLocallyMuted = Boolean(peerLocalMuted[item.peerId])
+        return (
+          <RemoteVoicePlayer
+            key={item.peerId}
+            item={item}
+            muted={deafened || isLocallyMuted || individualVol === 0}
+            volume={soundSettings.volume * individualVol}
+            voiceEffect={userVoiceEffects[item.peerId]?.type || null}
+          />
+        )
+      })}
 
       {/* LEFT SIDEBAR: Discord Server Channels */}
       <aside className="flex w-60 shrink-0 flex-col bg-[#2b2d31] select-none">
@@ -1757,7 +1811,7 @@ export function CommunityHub() {
                       <div
                         key={peer.id}
                         onClick={() => setInspectedMember(peer)}
-                        className={`group relative flex h-56 w-80 cursor-pointer flex-col items-center justify-center rounded-xl bg-[#2b2d31] p-4 shadow-md transition ${
+                        className={`group relative flex min-h-60 w-80 cursor-pointer flex-col items-center justify-center rounded-xl bg-[#2b2d31] p-4 shadow-md transition ${
                           talking
                             ? 'ring-2 ring-[#23a55a]'
                             : 'border border-[#232428] hover:border-[#3f4147]'
@@ -1826,6 +1880,49 @@ export function CommunityHub() {
                             </span>
                           ))}
                         </div>
+
+                        {/* Individual Peer Volume Slider (0% - 200% like Discord) */}
+                        {peer.id !== user?.id && (
+                          <div
+                            onClick={(e) => e.stopPropagation()}
+                            className="mt-2 flex w-full max-w-[210px] items-center gap-2 rounded-md bg-[#1e1f22] px-2.5 py-1"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => handleTogglePeerLocalMute(peer.id)}
+                              className="cursor-pointer text-zinc-300 hover:text-white"
+                              title={
+                                peerLocalMuted[peer.id]
+                                  ? 'Desmutar usuário'
+                                  : 'Silenciar usuário para mim'
+                              }
+                            >
+                              {peerLocalMuted[peer.id] || (peerVolumes[peer.id] ?? 1) === 0 ? (
+                                <VolumeX className="h-3.5 w-3.5 text-[#da373c]" />
+                              ) : (
+                                <Volume2 className="h-3.5 w-3.5 text-[#23a55a]" />
+                              )}
+                            </button>
+                            <input
+                              type="range"
+                              min={0}
+                              max={2}
+                              step={0.05}
+                              value={
+                                peerLocalMuted[peer.id] ? 0 : (peerVolumes[peer.id] ?? 1)
+                              }
+                              onChange={(e) =>
+                                handleChangePeerVolume(peer.id, parseFloat(e.target.value))
+                              }
+                              className="h-1 flex-1 cursor-pointer accent-[#5865f2]"
+                            />
+                            <span className="w-9 text-right text-[10px] font-bold text-zinc-300">
+                              {peerLocalMuted[peer.id]
+                                ? '0%'
+                                : `${Math.round((peerVolumes[peer.id] ?? 1) * 100)}%`}
+                            </span>
+                          </div>
+                        )}
 
                         {/* Custom SVG 3D Prank Action Buttons (Always visible on Windows!) */}
                         <div
