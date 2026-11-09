@@ -363,6 +363,7 @@ export function CommunityHub() {
     isSpeaking,
     micSettings,
     updateMicSettings,
+    updateShareQuality,
     speakingPeers,
     peerMuteStates,
     activePrank,
@@ -1312,15 +1313,18 @@ export function CommunityHub() {
               </div>
             )}
 
-            {/* Resolution & 120 FPS Selector */}
+            {/* Resolution & 120 FPS Selector (Can also be switched live while streaming!) */}
             <div className="flex items-center gap-1 rounded bg-[#1e1f22] px-2 py-1 text-xs">
               <select
                 value={resolution}
-                onChange={(e) =>
-                  setResolution(e.target.value as ScreenShareOptions['resolution'])
-                }
-                disabled={isSharing}
-                className="cursor-pointer bg-transparent font-semibold text-zinc-200 focus:outline-none disabled:opacity-50"
+                onChange={(e) => {
+                  const nextRes = e.target.value as ScreenShareOptions['resolution']
+                  setResolution(nextRes)
+                  if (isSharing) {
+                    updateShareQuality({ resolution: nextRes, fps, includeAudio: true })
+                  }
+                }}
+                className="cursor-pointer bg-transparent font-semibold text-zinc-200 focus:outline-none"
               >
                 <option value="720p" className="bg-[#1e1f22]">
                   720p
@@ -1335,11 +1339,14 @@ export function CommunityHub() {
               <span className="text-zinc-600">/</span>
               <select
                 value={fps}
-                onChange={(e) =>
-                  setFps(Number(e.target.value) as ScreenShareOptions['fps'])
-                }
-                disabled={isSharing}
-                className="cursor-pointer bg-transparent font-semibold text-zinc-200 focus:outline-none disabled:opacity-50"
+                onChange={(e) => {
+                  const nextFps = Number(e.target.value) as ScreenShareOptions['fps']
+                  setFps(nextFps)
+                  if (isSharing) {
+                    updateShareQuality({ resolution, fps: nextFps, includeAudio: true })
+                  }
+                }}
+                className="cursor-pointer bg-transparent font-semibold text-zinc-200 focus:outline-none"
               >
                 <option value={30} className="bg-[#1e1f22]">
                   30 FPS

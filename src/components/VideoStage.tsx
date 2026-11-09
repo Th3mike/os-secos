@@ -24,6 +24,11 @@ export function VideoStage({
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [muted, setMuted] = useState(isLocal)
   const [volume, setVolume] = useState(1)
+  const [liveStats, setLiveStats] = useState<{
+    width: number
+    height: number
+    fps: number
+  }>({ width: 0, height: 0, fps: 0 })
 
   useEffect(() => {
     const videoEl = videoRef.current
@@ -35,7 +40,6 @@ export function VideoStage({
 
     const ensurePlay = () => {
       videoEl.play().catch(() => {
-        // Fallback: if browser blocks autoplay with audio, start muted so video never stays black
         videoEl.muted = true
         setMuted(true)
         videoEl.play().catch(() => {})
@@ -55,7 +59,54 @@ export function VideoStage({
       t.onunmute = ensurePlay
     })
 
+    // Measure real rendered FPS & resolution using requestVideoFrameCallback (or fallback)
+    let frameCount = 0
+    let lastTime = performance.now()
+    let rvfcId: number | null = null
+    const anyVideo = videoEl as HTMLVideoElement & {
+      requestVideoFrameCallback?: (cb: (now: number) => void) => number
+      cancelVideoFrameCallback?: (id: number) => void
+    }
+
+    const onFrame = (now: number) => {
+      frameCount++
+      const delta = now - lastTime
+      if (delta >= 1000) {
+        const currentFps = Math.round((frameCount * 1000) / delta)
+        const settings = stream.getVideoTracks()[0]?.getSettings()
+        setLiveStats({
+          width: videoEl.videoWidth || settings?.width || 0,
+          height: videoEl.videoHeight || settings?.height || 0,
+          fps: currentFps || Math.round(settings?.frameRate || 0),
+        })
+        frameCount = 0
+        lastTime = now
+      }
+      if (anyVideo.requestVideoFrameCallback) {
+        rvfcId = anyVideo.requestVideoFrameCallback(onFrame)
+      }
+    }
+
+    if (anyVideo.requestVideoFrameCallback) {
+      rvfcId = anyVideo.requestVideoFrameCallback(onFrame)
+    }
+
+    const fallbackInterval = setInterval(() => {
+      if (!anyVideo.requestVideoFrameCallback) {
+        const settings = stream.getVideoTracks()[0]?.getSettings()
+        setLiveStats({
+          width: videoEl.videoWidth || settings?.width || 0,
+          height: videoEl.videoHeight || settings?.height || 0,
+          fps: Math.round(settings?.frameRate || 60),
+        })
+      }
+    }, 1500)
+
     return () => {
+      clearInterval(fallbackInterval)
+      if (rvfcId !== null && anyVideo.cancelVideoFrameCallback) {
+        anyVideo.cancelVideoFrameCallback(rvfcId)
+      }
       videoEl.removeEventListener('loadedmetadata', handleLoadedMetadata)
       tracks.forEach((t) => {
         t.onunmute = null
@@ -108,7 +159,7 @@ export function VideoStage({
       ref={containerRef}
       className="group relative flex h-full w-full flex-col overflow-hidden rounded-lg border border-[#232428] bg-black"
     >
-      {/* Top Overlay Header (Discord Stream Style) */}
+      {/* Top Overlay Header (Discord Stream Style with Live Resolution & FPS Badge) */}
       <div className="pointer-events-none absolute top-2.5 right-2.5 left-2.5 z-10 flex items-center justify-between">
         <div className="flex items-center gap-2 rounded-md bg-[#111214]/85 px-2.5 py-1 backdrop-blur-sm">
           <img
@@ -122,16 +173,22 @@ export function VideoStage({
           <span className="rounded bg-[#da373c] px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white uppercase">
             AO VIVO
           </span>
+          {liveStats.height > 0 && (
+            <span className="rounded bg-[#2b2d31] px-1.5 py-0.5 text-[10px] font-extrabold text-emerald-400">
+              {liveStats.height}p {liveStats.fps > 0 ? `${liveStats.fps} FPS` : ''}
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Video Element fills adjustable stage */}
+      {/* Video Element fills adjustable stage with GPU layer promotion for crisp text */}
       <video
         ref={videoRef}
         autoPlay
         playsInline
         muted={isLocal || muted || deafened}
         onClick={onToggleFocus}
+        style={{ transform: 'translateZ(0)', backfaceVisibility: 'hidden' }}
         className="h-full w-full flex-1 cursor-pointer bg-black object-contain"
       />
 
@@ -158,7 +215,9 @@ export function VideoStage({
               />
             </>
           ) : (
-            <span className="text-[11px] text-zinc-400">Sua transmissão</span>
+            <span className="text-[11px] text-zinc-400">
+              Sua transmissão {liveStats.height > 0 ? `(${liveStats.width}x${liveStats.height} @ ${liveStats.fps}fps)` : ''}
+            </span>
           )}
         </div>
 

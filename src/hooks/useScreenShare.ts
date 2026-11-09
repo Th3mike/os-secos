@@ -87,6 +87,11 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const currentUserRef = useRef<UserProfile | null>(currentUser)
   const roomPeersRef = useRef<UserProfile[]>([])
   const localStreamRef = useRef<MediaStream | null>(null)
+  const shareOptionsRef = useRef<ScreenShareOptions>({
+    resolution: '1080p',
+    fps: 60,
+    includeAudio: true,
+  })
   const rawMicStreamRef = useRef<MediaStream | null>(null)
   const micStreamRef = useRef<MediaStream | null>(null)
   const micAudioCtxRef = useRef<AudioContext | null>(null)
@@ -250,6 +255,41 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     }
   }, [])
 
+  const applySenderHighQualityParameters = useCallback(async (pc: RTCPeerConnection) => {
+    const opts = shareOptionsRef.current
+    // High bitrates for crystal-clear sharpness & smooth 60/120fps without blockiness:
+    // 720p -> 8 Mbps, 1080p -> 15 Mbps, 1440p -> 24 Mbps (boosted by 30% for 120fps)
+    const baseBps =
+      opts.resolution === '1440p'
+        ? 20_000_000
+        : opts.resolution === '1080p'
+        ? 12_000_000
+        : 6_500_000
+    const maxBitrate = opts.fps === 120 ? Math.round(baseBps * 1.35) : baseBps
+
+    for (const sender of pc.getSenders()) {
+      if (sender.track && sender.track.kind === 'video') {
+        try {
+          const params = sender.getParameters()
+          if (!params.encodings || params.encodings.length === 0) {
+            params.encodings = [{}]
+          }
+          params.encodings[0].maxBitrate = maxBitrate
+          params.encodings[0].maxFramerate = opts.fps
+          params.encodings[0].scaleResolutionDownBy = 1.0
+          params.encodings[0].priority = 'high'
+          params.encodings[0].networkPriority = 'high'
+          // Maintain resolution so text/UI in screen shares never gets blurry!
+          ;(params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference =
+            'maintain-resolution'
+          await sender.setParameters(params)
+        } catch {
+          // Ignore if browser doesn't support specific encoding param
+        }
+      }
+    }
+  }, [])
+
   const syncTracksAndOffer = useCallback(
     async (targetPeerId: string, targetUser: UserProfile) => {
       const me = currentUserRef.current
@@ -278,6 +318,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         })
       }
 
+      await applySenderHighQualityParameters(pc)
+
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
       sendSignal({
@@ -288,7 +330,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         sdp: pc.localDescription!,
       })
     },
-    [getOrCreatePeerConnection, sendSignal]
+    [applySenderHighQualityParameters, getOrCreatePeerConnection, sendSignal]
   )
 
   const renegotiateAllPeers = useCallback(async () => {
@@ -531,6 +573,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       const me = currentUserRef.current
       if (!me) return
       setError(null)
+      shareOptionsRef.current = options
 
       const heightMap = { '720p': 720, '1080p': 1080, '1440p': 1440 }
       const widthMap = { '720p': 1280, '1080p': 1920, '1440p': 2560 }
@@ -540,7 +583,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           localStreamRef.current.getTracks().forEach((t) => t.stop())
         }
 
-        // Do NOT pass max: 120 because entire-screen capture on Windows fails/goes black if monitor is 60Hz
+        // Request exact ideal resolution & FPS without hard max that breaks 60Hz monitors
         const stream = await navigator.mediaDevices.getDisplayMedia({
           video: {
             width: { ideal: widthMap[options.resolution] },
@@ -558,7 +601,18 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
         const [videoTrack] = stream.getVideoTracks()
         if (videoTrack) {
-          videoTrack.contentHint = 'motion'
+          // Enforce chosen resolution & frameRate on the captured track itself
+          try {
+            await videoTrack.applyConstraints({
+              width: { ideal: widthMap[options.resolution] },
+              height: { ideal: heightMap[options.resolution] },
+              frameRate: { ideal: options.fps },
+            })
+          } catch {
+            // Ignore if OS capture source locks resolution
+          }
+          // For 60/120fps use 'motion' for fluid frames; for 30fps use 'detail' for sharpest text
+          videoTrack.contentHint = options.fps >= 60 ? 'motion' : 'detail'
           videoTrack.onended = () => {
             stopScreenShare()
           }
@@ -893,6 +947,35 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     [sendSignal]
   )
 
+  const updateShareQuality = useCallback(
+    async (options: ScreenShareOptions) => {
+      shareOptionsRef.current = options
+      const heightMap = { '720p': 720, '1080p': 1080, '1440p': 1440 }
+      const widthMap = { '720p': 1280, '1080p': 1920, '1440p': 2560 }
+
+      if (localStreamRef.current) {
+        const [videoTrack] = localStreamRef.current.getVideoTracks()
+        if (videoTrack) {
+          try {
+            await videoTrack.applyConstraints({
+              width: { ideal: widthMap[options.resolution] },
+              height: { ideal: heightMap[options.resolution] },
+              frameRate: { ideal: options.fps },
+            })
+            videoTrack.contentHint = options.fps >= 60 ? 'motion' : 'detail'
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      for (const pc of pcsRef.current.values()) {
+        await applySenderHighQualityParameters(pc)
+      }
+    },
+    [applySenderHighQualityParameters]
+  )
+
   return {
     localStream,
     isSharing,
@@ -904,6 +987,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     isSpeaking,
     micSettings,
     updateMicSettings,
+    updateShareQuality,
     speakingPeers,
     peerMuteStates,
     activePrank,

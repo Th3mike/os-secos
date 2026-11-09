@@ -252,13 +252,14 @@ interface PrankStageOverlayProps {
 export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlayProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
   const [comicSubtitle, setComicSubtitle] = useState<string>('')
+  const [expanded, setExpanded] = useState<boolean>(false)
 
   useEffect(() => {
     if (!activePrank || !mountRef.current) return
 
     const container = mountRef.current
-    const width = container.clientWidth || window.innerWidth
-    const height = container.clientHeight || 520
+    const width = container.clientWidth || 360
+    const height = container.clientHeight || 225
 
     const scene = new THREE.Scene()
     scene.fog = new THREE.FogExp2(0x090a0f, 0.025)
@@ -891,7 +892,7 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
       cancelAnimationFrame(frameId)
       renderer.dispose()
     }
-  }, [activePrank, onComplete])
+  }, [activePrank, expanded, onComplete])
 
   if (!activePrank) return null
 
@@ -899,40 +900,62 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
 
   return (
     <div
-      onClick={onComplete}
-      className="fixed inset-0 z-50 flex cursor-pointer flex-col items-center justify-between bg-black/85 p-5 backdrop-blur-xs select-none"
+      className={`fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-amber-500/40 bg-[#111214]/95 shadow-2xl backdrop-blur-md transition-all select-none ${
+        expanded
+          ? 'right-6 bottom-20 h-[440px] w-[620px] max-w-[92vw]'
+          : 'right-4 bottom-20 w-[360px] max-w-[90vw]'
+      }`}
     >
-      {/* Top Header Banner */}
-      <div className="z-10 flex flex-col items-center gap-1 rounded-2xl border border-white/15 bg-[#111214]/95 px-6 py-3 text-center shadow-2xl">
-        <div className="text-sm font-extrabold text-white">
-          <span className="text-amber-400">{activePrank.fromUser.username}</span>{' '}
-          {activePrank.type === 'bury' && 'enterrou na cova:'}
-          {activePrank.type === 'coffin' && 'trancou no caixão:'}
-          {activePrank.type === 'reaper' && 'ceifou a alma de:'}
-          {activePrank.type === 'water' && 'jogou um balde d’água em:'}{' '}
-          <span className="text-emerald-400">{activePrank.targetUser.username}</span>!
-        </div>
-        {prankMeta && (
-          <div className="text-xs font-bold text-amber-300">
-            🎙️ Efeito na Voz Ativado: {prankMeta.voiceEffectLabel}
+      {/* Compact Top Header Bar */}
+      <div className="flex items-center justify-between gap-2 border-b border-white/10 bg-[#18191c] px-3 py-2">
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-extrabold text-white">
+            <span className="text-amber-400">{activePrank.fromUser.username}</span>{' '}
+            {activePrank.type === 'bury' && 'enterrou'}
+            {activePrank.type === 'coffin' && 'trancou no caixão'}
+            {activePrank.type === 'reaper' && 'ceifou'}
+            {activePrank.type === 'water' && 'hidratou'}{' '}
+            <span className="text-emerald-400">{activePrank.targetUser.username}</span>!
           </div>
-        )}
+          {prankMeta && (
+            <div className="truncate text-[10px] font-bold text-amber-300">
+              🎙️ {prankMeta.voiceEffectLabel}
+            </div>
+          )}
+        </div>
+
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setExpanded((e) => !e)}
+            className="cursor-pointer rounded bg-[#2b2d31] px-2 py-0.5 text-[10px] font-bold text-zinc-300 hover:bg-[#35373c] hover:text-white"
+            title={expanded ? 'Reduzir tamanho' : 'Aumentar tamanho'}
+          >
+            {expanded ? 'Menor' : 'Maior'}
+          </button>
+          <button
+            type="button"
+            onClick={onComplete}
+            className="cursor-pointer rounded bg-[#da373c]/20 px-2 py-0.5 text-[10px] font-bold text-[#da373c] hover:bg-[#da373c] hover:text-white"
+            title="Fechar animação 3D"
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
-      {/* Three.js 3D Stage */}
-      <div ref={mountRef} className="h-[480px] w-full max-w-4xl flex-1" />
+      {/* Three.js 3D Stage in Corner Picture-in-Picture */}
+      <div
+        ref={mountRef}
+        className={`w-full bg-[#090a0f] ${expanded ? 'h-[330px]' : 'h-[215px]'}`}
+      />
 
-      {/* Live Story Subtitle & Dismiss Hint */}
-      <div className="z-10 flex flex-col items-center gap-2">
-        {comicSubtitle && (
-          <div className="rounded-xl border border-amber-400/40 bg-[#18191c] px-5 py-2 text-sm font-black tracking-wide text-amber-300 shadow-lg">
-            {comicSubtitle}
-          </div>
-        )}
-        <div className="rounded-full bg-[#1e1f22] px-4 py-1 text-xs font-semibold text-zinc-400">
-          Clique em qualquer lugar para fechar a cena 3D (o efeito na voz dura 15s)
+      {/* Live Story Subtitle Bar */}
+      {comicSubtitle && (
+        <div className="border-t border-white/10 bg-[#18191c] px-3 py-1.5 text-center text-[11px] font-extrabold text-amber-300">
+          {comicSubtitle}
         </div>
-      </div>
+      )}
     </div>
   )
 }
