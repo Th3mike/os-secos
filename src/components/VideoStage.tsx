@@ -34,7 +34,9 @@ export function VideoStage({
   const [muted, setMuted] = useState(isLocal)
   const [volume, setVolume] = useState(1)
   const [showViewersPopover, setShowViewersPopover] = useState(false)
-  const [pauseLocalPreview, setPauseLocalPreview] = useState(false)
+  // Default pauseLocalPreview to TRUE for local screen share (not webcam) so the streamer's
+  // browser never renders a 60/120fps infinite mirror of their own screen (which spikes Windows 10 WGC / explorer.exe!)
+  const [pauseLocalPreview, setPauseLocalPreview] = useState(() => isLocal && !isWebcam)
   const [liveStats, setLiveStats] = useState<{
     width: number
     height: number
