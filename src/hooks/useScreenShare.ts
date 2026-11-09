@@ -263,8 +263,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       opts.resolution === '1440p'
         ? 20_000_000
         : opts.resolution === '1080p'
-        ? 12_000_000
-        : 6_500_000
+          ? 12_000_000
+          : 6_500_000
     const maxBitrate = opts.fps === 120 ? Math.round(baseBps * 1.35) : baseBps
 
     for (const sender of pc.getSenders()) {
@@ -279,9 +279,9 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           params.encodings[0].scaleResolutionDownBy = 1.0
           params.encodings[0].priority = 'high'
           params.encodings[0].networkPriority = 'high'
-          // Maintain resolution so text/UI in screen shares never gets blurry!
-          ;(params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference =
-            'maintain-resolution'
+            // Maintain resolution so text/UI in screen shares never gets blurry!
+            ; (params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference =
+              'maintain-resolution'
           await sender.setParameters(params)
         } catch {
           // Ignore if browser doesn't support specific encoding param
@@ -592,10 +592,10 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           },
           audio: options.includeAudio
             ? {
-                echoCancellation: false,
-                noiseSuppression: false,
-                autoGainControl: false,
-              }
+              echoCancellation: false,
+              noiseSuppression: false,
+              autoGainControl: false,
+            }
             : false,
         })
 
@@ -666,7 +666,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
               echoCancellation: next.echoCancellation,
               autoGainControl: next.autoGainControl,
             })
-            .catch(() => {})
+            .catch(() => { })
         }
       }
 
@@ -713,7 +713,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         rawMicStreamRef.current?.getTracks().forEach((t) => t.stop())
         rawMicStreamRef.current = null
         micStreamRef.current = null
-        micAudioCtxRef.current?.close().catch(() => {})
+        micAudioCtxRef.current?.close().catch(() => { })
         micAudioCtxRef.current = null
         setMicEnabled(false)
         setIsSpeaking(false)
