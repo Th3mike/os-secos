@@ -814,17 +814,12 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           localStreamRef.current.getTracks().forEach((t) => t.stop())
         }
 
-        const videoConstraints: MediaTrackConstraints & { displaySurface?: string } = {
-          width: { ideal: widthMap[options.resolution] },
-          height: { ideal: heightMap[options.resolution] },
-          frameRate: { ideal: options.fps },
-        }
-        if (options.surface) {
-          videoConstraints.displaySurface = options.surface
-        }
-
         const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: videoConstraints,
+          video: {
+            width: { ideal: widthMap[options.resolution] },
+            height: { ideal: heightMap[options.resolution] },
+            frameRate: { ideal: options.fps },
+          },
           audio: options.includeAudio
             ? {
                 echoCancellation: false,
@@ -832,9 +827,6 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
                 autoGainControl: false,
               }
             : false,
-          // @ts-expect-error Chromium screen share options to avoid infinite mirror
-          selfBrowserSurface: 'exclude',
-          surfaceSwitching: 'include',
         })
 
         const [videoTrack] = stream.getVideoTracks()
