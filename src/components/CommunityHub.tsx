@@ -483,6 +483,8 @@ export function CommunityHub() {
     setActivePrank,
     watchState,
     updateWatchTogether,
+    cinemaPlayers,
+    broadcastCinemaState,
     triggerPrank,
     error,
     startScreenShare,
@@ -696,6 +698,9 @@ export function CommunityHub() {
       setUnreadCounts((prev) => ({ ...prev, [ch.id]: 0 }))
     } else if (ch.type === 'voice') {
       setActiveVoiceRoom(ch)
+      if (ch.id === 'cinema' || ch.name.toLowerCase().includes('watch') || ch.name.toLowerCase().includes('cinema')) {
+        setShowWatchTogether(true)
+      }
       if (voiceChatOpen) {
         setUnreadCounts((prev) => ({ ...prev, [ch.id]: 0 }))
       }
@@ -1617,7 +1622,7 @@ export function CommunityHub() {
                 }`}
               >
                 <Tv className="h-3.5 w-3.5" />
-                Watch / Música
+                Cinema 3D
               </button>
             )}
 
@@ -1795,9 +1800,17 @@ export function CommunityHub() {
                 <WatchTogetherStage
                   watchState={watchState}
                   currentUser={user}
+                  roomPeers={roomPeers}
+                  speakingPeers={speakingPeers}
+                  isSelfSpeaking={isSpeaking}
+                  cinemaPlayers={cinemaPlayers}
+                  liveScreenStream={remoteStreams[0]?.stream || localStream || null}
+                  liveScreenStreamerName={
+                    remoteStreams[0]?.user.username || (localStream ? user?.username : null)
+                  }
+                  onBroadcastCinemaState={broadcastCinemaState}
                   onUpdateWatchState={updateWatchTogether}
                   onStartTabShare={() => {
-                    setShowWatchTogether(false)
                     setShareSurface('browser')
                     setShareIncludeAudio(true)
                     setShowScreenShareModal(true)
@@ -2249,7 +2262,7 @@ export function CommunityHub() {
                   }`}
                 >
                   <Tv className="h-3.5 w-3.5" />
-                  Watch Together
+                  🍿 Cinema 3D
                 </button>
 
                 <button

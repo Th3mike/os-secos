@@ -8,6 +8,7 @@ import {
   PrankEvent,
   PrankType,
   WatchTogetherState,
+  CinemaPlayerState,
 } from '@/types/community'
 import { playRoomEventSound } from '@/lib/soundEngine'
 import type { RealtimeChannel } from '@supabase/supabase-js'
@@ -215,6 +216,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   >({})
   const [activePrank, setActivePrank] = useState<PrankEvent | null>(null)
   const [watchState, setWatchState] = useState<WatchTogetherState | null>(null)
+  const [cinemaPlayers, setCinemaPlayers] = useState<Record<string, CinemaPlayerState>>({})
   const [error, setError] = useState<string | null>(null)
 
   const currentUserRef = useRef<UserProfile | null>(currentUser)
@@ -238,6 +240,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const micWasEnabledBeforeDeafenRef = useRef(false)
   const myWatchingIdsRef = useRef<string[]>([])
   const watchStateRef = useRef<WatchTogetherState | null>(null)
+  const myCinemaPlayerRef = useRef<CinemaPlayerState | null>(null)
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
   const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map())
   const channelRef = useRef<RealtimeChannel | null>(null)
@@ -283,6 +286,12 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     setRemoteWebcams((prev) => prev.filter((item) => item.peerId !== peerId))
     setRemoteAudios((prev) => prev.filter((item) => item.peerId !== peerId))
     setPeerWatchingMap((prev) => {
+      if (!prev[peerId]) return prev
+      const copy = { ...prev }
+      delete copy[peerId]
+      return copy
+    })
+    setCinemaPlayers((prev) => {
       if (!prev[peerId]) return prev
       const copy = { ...prev }
       delete copy[peerId]
@@ -613,6 +622,15 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
                 watchingIds: myWatchingIdsRef.current,
               })
             }
+            if (myCinemaPlayerRef.current) {
+              sendSignal({
+                type: 'cinema-state',
+                from: curMe.id,
+                fromUser: curMe,
+                to: sig.from,
+                cinemaPlayer: myCinemaPlayerRef.current,
+              })
+            }
           } else if (sig.type === 'offer' && sig.sdp) {
             if (sig.screenStreamId !== undefined || sig.webcamStreamId !== undefined) {
               peerMediaIdsRef.current.set(sig.from, {
@@ -707,6 +725,11 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             }
           } else if (sig.type === 'watch-sync') {
             setWatchState(sig.watchState || null)
+          } else if (sig.type === 'cinema-state' && sig.cinemaPlayer) {
+            setCinemaPlayers((prev) => ({
+              ...prev,
+              [sig.from]: sig.cinemaPlayer!,
+            }))
           }
         } catch (err) {
           console.error('Signal error:', err)
@@ -747,6 +770,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       setRemoteWebcams([])
       setRemoteAudios([])
       setPeerWatchingMap({})
+      setCinemaPlayers({})
       supabase.removeChannel(channel)
       channelRef.current = null
     }
@@ -1360,6 +1384,25 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     [sendSignal]
   )
 
+  const broadcastCinemaState = useCallback(
+    (playerState: CinemaPlayerState) => {
+      const me = currentUserRef.current
+      if (!me) return
+      myCinemaPlayerRef.current = playerState
+      setCinemaPlayers((prev) => ({
+        ...prev,
+        [me.id]: playerState,
+      }))
+      sendSignal({
+        type: 'cinema-state',
+        from: me.id,
+        fromUser: me,
+        cinemaPlayer: playerState,
+      })
+    },
+    [sendSignal]
+  )
+
   return {
     localStream,
     isSharing,
@@ -1383,6 +1426,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     setActivePrank,
     watchState,
     updateWatchTogether,
+    cinemaPlayers,
+    broadcastCinemaState,
     triggerPrank,
     error,
     startScreenShare,

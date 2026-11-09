@@ -52,9 +52,82 @@ export interface PrankEvent {
   timestamp: number
 }
 
+export type CinemaPresetId =
+  | 'custom'
+  | 'goku'
+  | 'naruto'
+  | 'luffy'
+  | 'gojo'
+  | 'tanjiro'
+  | 'akatsuki'
+  | 'cyberpunk'
+  | 'knight'
+  | 'king-seco'
+
+export type CinemaHairStyle =
+  | 'none'
+  | 'spiky-gold'
+  | 'spiky-black'
+  | 'ninja-blonde'
+  | 'anime-white'
+  | 'burgundy'
+  | 'afro'
+  | 'long-red'
+
+export type CinemaHatStyle =
+  | 'none'
+  | 'straw-hat'
+  | 'headband'
+  | 'crown'
+  | 'wizard'
+  | 'cat-ears'
+  | 'halo'
+  | 'horns'
+
+export type CinemaAccessoryStyle =
+  | 'none'
+  | 'katana'
+  | 'blindfold'
+  | 'glasses'
+  | 'cape'
+  | 'popcorn'
+  | 'wings'
+
+export type CinemaAuraStyle =
+  | 'none'
+  | 'super-saiyan'
+  | 'purple-curse'
+  | 'blue-chakra'
+  | 'fire-red'
+
+export type CinemaEmoteType = 'none' | 'wave' | 'dance' | 'cheer' | 'popcorn'
+
+export interface CinemaAvatarConfig {
+  presetId: CinemaPresetId
+  shirtColor: string
+  pantsColor: string
+  hairStyle: CinemaHairStyle
+  hatStyle: CinemaHatStyle
+  accessory: CinemaAccessoryStyle
+  aura: CinemaAuraStyle
+}
+
+export interface CinemaPlayerState {
+  userId: string
+  user: UserProfile
+  x: number
+  y: number
+  z: number
+  rotY: number
+  seatIndex: number | null
+  emote: CinemaEmoteType
+  avatar: CinemaAvatarConfig
+  updatedAt: number
+}
+
 export interface WatchTogetherState {
   active: boolean
-  provider: 'youtube' | 'spotify' | 'twitch' | 'kick' | 'custom'
+  provider: 'youtube' | 'spotify' | 'twitch' | 'kick' | 'mp4' | 'custom'
   url: string
   embedUrl: string
   title?: string
@@ -63,6 +136,7 @@ export interface WatchTogetherState {
   isPlaying: boolean
   currentTime: number
   updatedAt: number
+  lightsDimmed?: boolean
 }
 
 export interface SignalPayload {
@@ -78,6 +152,7 @@ export interface SignalPayload {
     | 'watching-state'
     | 'prank'
     | 'watch-sync'
+    | 'cinema-state'
   from: string
   fromUser: UserProfile
   to?: string
@@ -89,6 +164,7 @@ export interface SignalPayload {
   watchingIds?: string[]
   prank?: PrankEvent
   watchState?: WatchTogetherState | null
+  cinemaPlayer?: CinemaPlayerState
   screenStreamId?: string | null
   webcamStreamId?: string | null
 }
