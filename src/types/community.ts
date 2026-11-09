@@ -38,6 +38,7 @@ export interface ChatMessage {
   username: string
   avatar_url: string
   content: string
+  image_url?: string | null
   created_at: string
 }
 

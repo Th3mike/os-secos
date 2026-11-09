@@ -10,8 +10,11 @@ create table if not exists public.messages (
   username text not null,
   avatar_url text not null,
   content text not null,
+  image_url text,
   created_at timestamptz not null default now()
 );
+
+alter table public.messages add column if not exists image_url text;
 
 create index if not exists idx_messages_room_created
   on public.messages (room_id, created_at desc);
@@ -143,3 +146,18 @@ begin
     alter publication supabase_realtime add table public.user_profiles;
   end if;
 end $$;
+
+-- 5. Bucket de Storage para imagens/screenshots do chat
+insert into storage.buckets (id, name, public)
+values ('chat-images', 'chat-images', true)
+on conflict (id) do update set public = true;
+
+drop policy if exists "Chat images select all" on storage.objects;
+create policy "Chat images select all"
+  on storage.objects for select
+  using (bucket_id = 'chat-images');
+
+drop policy if exists "Chat images insert all" on storage.objects;
+create policy "Chat images insert all"
+  on storage.objects for insert
+  with check (bucket_id = 'chat-images');
