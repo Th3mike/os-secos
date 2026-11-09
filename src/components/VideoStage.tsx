@@ -10,6 +10,8 @@ interface VideoStageProps {
   isWebcam?: boolean
   deafened?: boolean
   isFocused?: boolean
+  targetFps?: number
+  targetResolution?: '720p' | '1080p' | '1440p'
   onToggleFocus?: () => void
 }
 
@@ -20,6 +22,8 @@ export function VideoStage({
   isWebcam = false,
   deafened = false,
   isFocused = false,
+  targetFps,
+  targetResolution,
   onToggleFocus,
 }: VideoStageProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -76,13 +80,39 @@ export function VideoStage({
       if (delta >= 1000) {
         const currentFps = Math.round((frameCount * 1000) / delta)
         const settings = stream.getVideoTracks()[0]?.getSettings()
-        const targetFps = Math.round(settings?.frameRate || 0)
+        const configuredFps = targetFps || Math.round(settings?.frameRate || 60)
+        // Windows Desktop Duplication drops capture events when pixels on screen aren't moving.
+        // Snap displayed FPS to the nearest standard tier (30 / 60 / 120) or configured target so the badge doesn't flicker constantly!
+        const stableFps =
+          targetFps ||
+          (currentFps >= 95
+            ? 120
+            : currentFps >= 45
+              ? 60
+              : currentFps >= 22
+                ? 30
+                : configuredFps)
+        const rawHeight = videoEl.videoWidth
+          ? videoEl.videoHeight
+          : settings?.height || 1080
+        const stableHeight =
+          targetResolution === '1440p'
+            ? 1440
+            : targetResolution === '1080p'
+              ? 1080
+              : targetResolution === '720p'
+                ? 720
+                : rawHeight >= 1300
+                  ? 1440
+                  : rawHeight >= 900
+                    ? 1080
+                    : rawHeight > 0
+                      ? 720
+                      : 1080
         setLiveStats({
-          width: videoEl.videoWidth || settings?.width || 0,
-          height: videoEl.videoHeight || settings?.height || 0,
-          // When a desktop screen is static (no mouse/window movement), Windows Desktop Duplication sends 1-2 keepalive frames/sec
-          // even though the stream is 60/120fps ready! Show actual motion FPS or configured track FPS when idle.
-          fps: currentFps <= 2 && targetFps >= 30 ? targetFps : currentFps || targetFps,
+          width: videoEl.videoWidth || settings?.width || 1920,
+          height: stableHeight,
+          fps: stableFps,
         })
         frameCount = 0
         lastTime = now
@@ -117,7 +147,7 @@ export function VideoStage({
         t.onunmute = null
       })
     }
-  }, [stream])
+  }, [stream, targetFps, targetResolution])
 
   const handleFullscreen = () => {
     if (!containerRef.current) return

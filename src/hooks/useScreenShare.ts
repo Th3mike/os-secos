@@ -124,6 +124,45 @@ export interface ScreenShareOptions {
   resolution: '720p' | '1080p' | '1440p'
   fps: 30 | 60 | 120
   includeAudio: boolean
+  surface?: 'window' | 'monitor' | 'browser'
+}
+
+const SHARE_OPTIONS_KEY = 'os_secos_screen_share_options_v1'
+
+export function loadScreenShareOptions(): ScreenShareOptions {
+  if (typeof window === 'undefined') {
+    return { resolution: '1080p', fps: 60, includeAudio: true, surface: 'monitor' }
+  }
+  try {
+    const raw = localStorage.getItem(SHARE_OPTIONS_KEY)
+    if (!raw) {
+      return { resolution: '1080p', fps: 60, includeAudio: true, surface: 'monitor' }
+    }
+    const parsed = JSON.parse(raw)
+    const resolution =
+      parsed.resolution === '720p' || parsed.resolution === '1080p' || parsed.resolution === '1440p'
+        ? parsed.resolution
+        : '1080p'
+    const fps =
+      parsed.fps === 30 || parsed.fps === 60 || parsed.fps === 120 ? parsed.fps : 60
+    const includeAudio = parsed.includeAudio ?? true
+    const surface =
+      parsed.surface === 'window' || parsed.surface === 'monitor' || parsed.surface === 'browser'
+        ? parsed.surface
+        : 'monitor'
+    return { resolution, fps, includeAudio, surface }
+  } catch {
+    return { resolution: '1080p', fps: 60, includeAudio: true, surface: 'monitor' }
+  }
+}
+
+export function saveScreenShareOptions(opts: ScreenShareOptions) {
+  if (typeof window === 'undefined') return
+  try {
+    localStorage.setItem(SHARE_OPTIONS_KEY, JSON.stringify(opts))
+  } catch {
+    // ignore
+  }
 }
 
 export type NoiseSuppressionMode = 'krisp' | 'standard' | 'off'
@@ -182,11 +221,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const peerMediaIdsRef = useRef<
     Map<string, { screenStreamId?: string | null; webcamStreamId?: string | null }>
   >(new Map())
-  const shareOptionsRef = useRef<ScreenShareOptions>({
-    resolution: '1080p',
-    fps: 60,
-    includeAudio: true,
-  })
+  const shareOptionsRef = useRef<ScreenShareOptions>(loadScreenShareOptions())
   const rawMicStreamRef = useRef<MediaStream | null>(null)
   const micStreamRef = useRef<MediaStream | null>(null)
   const micAudioCtxRef = useRef<AudioContext | null>(null)
@@ -733,11 +768,14 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   }, [sendSignal])
 
   const startScreenShare = useCallback(
-    async (options: ScreenShareOptions = { resolution: '1080p', fps: 60, includeAudio: true }) => {
+    async (
+      options: ScreenShareOptions = loadScreenShareOptions()
+    ) => {
       const me = currentUserRef.current
       if (!me) return
       setError(null)
       shareOptionsRef.current = options
+      saveScreenShareOptions(options)
 
       const heightMap = { '720p': 720, '1080p': 1080, '1440p': 1440 }
       const widthMap = { '720p': 1280, '1080p': 1920, '1440p': 2560 }
@@ -747,19 +785,27 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           localStreamRef.current.getTracks().forEach((t) => t.stop())
         }
 
+        const videoConstraints: MediaTrackConstraints & { displaySurface?: string } = {
+          width: { ideal: widthMap[options.resolution] },
+          height: { ideal: heightMap[options.resolution] },
+          frameRate: { ideal: options.fps },
+        }
+        if (options.surface) {
+          videoConstraints.displaySurface = options.surface
+        }
+
         // Request exact ideal resolution & FPS without hard max that breaks 60Hz monitors
         const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            width: { ideal: widthMap[options.resolution] },
-            height: { ideal: heightMap[options.resolution] },
-            frameRate: { ideal: options.fps },
-          },
+          video: videoConstraints,
           audio: options.includeAudio
             ? {
-              echoCancellation: false,
-              noiseSuppression: false,
-              autoGainControl: false,
-            }
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false,
+                // @ts-expect-error Chromium system audio capture hints
+                systemAudio: 'include',
+                suppressLocalAudioPlayback: false,
+              }
             : false,
         })
 
@@ -1106,6 +1152,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const updateShareQuality = useCallback(
     async (options: ScreenShareOptions) => {
       shareOptionsRef.current = options
+      saveScreenShareOptions(options)
       const heightMap = { '720p': 720, '1080p': 1080, '1440p': 1440 }
       const widthMap = { '720p': 1280, '1080p': 1920, '1440p': 2560 }
 

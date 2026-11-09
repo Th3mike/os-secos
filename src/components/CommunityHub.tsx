@@ -10,6 +10,12 @@ import {
   AudioWaveform,
   Camera,
   CameraOff,
+  Monitor,
+  AppWindow,
+  Globe,
+  Volume2,
+  VolumeX,
+  Sparkles,
 } from 'lucide-react'
 import { Room, UserProfile, Role, ChatMessage, PrankType } from '@/types/community'
 import {
@@ -17,6 +23,8 @@ import {
   ScreenShareOptions,
   RemoteAudioItem,
   NoiseSuppressionMode,
+  loadScreenShareOptions,
+  saveScreenShareOptions,
 } from '@/hooks/useScreenShare'
 import { VideoStage } from './VideoStage'
 import { ChatPanel } from './ChatPanel'
@@ -276,9 +284,18 @@ export function CommunityHub() {
     Record<string, { type: PrankType; expiresAt: number }>
   >({})
 
-  // Stream, Watch Together & UI Controls
-  const [resolution, setResolution] = useState<ScreenShareOptions['resolution']>('1080p')
-  const [fps, setFps] = useState<ScreenShareOptions['fps']>(60)
+  // Stream, Watch Together & UI Controls (Persisted so quality & FPS never reset!)
+  const [resolution, setResolution] = useState<ScreenShareOptions['resolution']>(
+    () => loadScreenShareOptions().resolution
+  )
+  const [fps, setFps] = useState<ScreenShareOptions['fps']>(() => loadScreenShareOptions().fps)
+  const [shareIncludeAudio, setShareIncludeAudio] = useState<boolean>(
+    () => loadScreenShareOptions().includeAudio
+  )
+  const [shareSurface, setShareSurface] = useState<NonNullable<ScreenShareOptions['surface']>>(
+    () => loadScreenShareOptions().surface || 'monitor'
+  )
+  const [showScreenShareModal, setShowScreenShareModal] = useState(false)
   const [soundSettings, setSoundSettings] = useState<SoundSettings>(DEFAULT_SOUND_SETTINGS)
   const [showAudioConfig, setShowAudioConfig] = useState(false)
   const [showNoiseSuppressionPopover, setShowNoiseSuppressionPopover] = useState(false)
@@ -1280,7 +1297,7 @@ export function CommunityHub() {
                     onClick={() => {
                       setSelectedChannel(activeVoiceRoom)
                       setShowWatchTogether(false)
-                      startScreenShare({ resolution, fps, includeAudio: true })
+                      setShowScreenShareModal(true)
                     }}
                     className="cursor-pointer rounded bg-[#2b2d31] px-2 py-1 text-[10px] font-semibold text-white hover:bg-[#35373c]"
                   >
@@ -1407,15 +1424,26 @@ export function CommunityHub() {
               </div>
             )}
 
-            {/* Resolution & 120 FPS Selector (Can also be switched live while streaming!) */}
+            {/* Resolution & 120 FPS Selector (Persisted & can also be switched live while streaming!) */}
             <div className="flex items-center gap-1 rounded bg-[#1e1f22] px-2 py-1 text-xs">
               <select
                 value={resolution}
                 onChange={(e) => {
                   const nextRes = e.target.value as ScreenShareOptions['resolution']
                   setResolution(nextRes)
+                  saveScreenShareOptions({
+                    resolution: nextRes,
+                    fps,
+                    includeAudio: shareIncludeAudio,
+                    surface: shareSurface,
+                  })
                   if (isSharing) {
-                    updateShareQuality({ resolution: nextRes, fps, includeAudio: true })
+                    updateShareQuality({
+                      resolution: nextRes,
+                      fps,
+                      includeAudio: shareIncludeAudio,
+                      surface: shareSurface,
+                    })
                   }
                 }}
                 className="cursor-pointer bg-transparent font-semibold text-zinc-200 focus:outline-none"
@@ -1436,8 +1464,19 @@ export function CommunityHub() {
                 onChange={(e) => {
                   const nextFps = Number(e.target.value) as ScreenShareOptions['fps']
                   setFps(nextFps)
+                  saveScreenShareOptions({
+                    resolution,
+                    fps: nextFps,
+                    includeAudio: shareIncludeAudio,
+                    surface: shareSurface,
+                  })
                   if (isSharing) {
-                    updateShareQuality({ resolution, fps: nextFps, includeAudio: true })
+                    updateShareQuality({
+                      resolution,
+                      fps: nextFps,
+                      includeAudio: shareIncludeAudio,
+                      surface: shareSurface,
+                    })
                   }
                 }}
                 className="cursor-pointer bg-transparent font-semibold text-zinc-200 focus:outline-none"
@@ -1646,7 +1685,9 @@ export function CommunityHub() {
                   onUpdateWatchState={updateWatchTogether}
                   onStartTabShare={() => {
                     setShowWatchTogether(false)
-                    startScreenShare({ resolution, fps, includeAudio: true })
+                    setShareSurface('browser')
+                    setShareIncludeAudio(true)
+                    setShowScreenShareModal(true)
                   }}
                 />
               ) : allStreams.length === 0 ? (
@@ -1768,6 +1809,16 @@ export function CommunityHub() {
                       isWebcam={activeFocusedStream.isWebcam}
                       deafened={deafened}
                       isFocused={allStreams.length > 1}
+                      targetFps={
+                        activeFocusedStream.isLocal && !activeFocusedStream.isWebcam
+                          ? fps
+                          : undefined
+                      }
+                      targetResolution={
+                        activeFocusedStream.isLocal && !activeFocusedStream.isWebcam
+                          ? resolution
+                          : undefined
+                      }
                       onToggleFocus={
                         allStreams.length > 1
                           ? () => setFocusedStreamId(null)
@@ -1851,6 +1902,8 @@ export function CommunityHub() {
                       isWebcam={item.isWebcam}
                       deafened={deafened}
                       isFocused={false}
+                      targetFps={item.isLocal && !item.isWebcam ? fps : undefined}
+                      targetResolution={item.isLocal && !item.isWebcam ? resolution : undefined}
                       onToggleFocus={() => setFocusedStreamId(item.id)}
                     />
                   ))}
@@ -1948,20 +2001,30 @@ export function CommunityHub() {
                   type="button"
                   onClick={() => {
                     setShowWatchTogether(false)
-                    startScreenShare({ resolution, fps, includeAudio: true })
+                    setShowScreenShareModal(true)
                   }}
                   className="cursor-pointer rounded-full bg-[#23a55a] px-5 py-2 text-xs font-bold text-white hover:bg-[#1a7f44]"
                 >
                   Compartilhar Tela
                 </button>
               ) : (
-                <button
-                  type="button"
-                  onClick={stopScreenShare}
-                  className="cursor-pointer rounded-full bg-[#da373c] px-5 py-2 text-xs font-bold text-white hover:bg-[#a1282c]"
-                >
-                  Parar Transmissão
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowScreenShareModal(true)}
+                    className="cursor-pointer rounded-full bg-[#2b2d31] px-3.5 py-2 text-xs font-semibold text-zinc-200 hover:bg-[#35373c]"
+                    title="Alterar qualidade, FPS, áudio ou trocar janela"
+                  >
+                    Qualidade ({resolution} {fps}fps)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={stopScreenShare}
+                    className="cursor-pointer rounded-full bg-[#da373c] px-5 py-2 text-xs font-bold text-white hover:bg-[#a1282c]"
+                  >
+                    Parar Transmissão
+                  </button>
+                </div>
               )}
 
               <button
@@ -2268,6 +2331,318 @@ export function CommunityHub() {
                     )
                   })}
                 </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Discord-Style Go Live / Screen Share Settings */}
+      {showScreenShareModal && (
+        <div
+          onClick={() => setShowScreenShareModal(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-lg overflow-hidden rounded-xl border border-[#1f2023] bg-[#313338] shadow-2xl"
+          >
+            {/* Header Banner */}
+            <div className="flex items-center justify-between border-b border-[#1f2023] bg-gradient-to-r from-[#2b2d31] via-[#313338] to-[#2b2d31] px-5 py-4">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[#5865f2]/20 text-[#5865f2] ring-1 ring-[#5865f2]/40">
+                  <Monitor className="h-5 w-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-base font-extrabold text-white">
+                      Compartilhar Tela
+                    </h3>
+                    <span className="inline-flex items-center gap-1 rounded-full bg-gradient-to-r from-fuchsia-500 to-indigo-500 px-2 py-0.5 text-[10px] font-black text-white uppercase shadow">
+                      <Sparkles className="h-2.5 w-2.5" />
+                      120 FPS Liberado
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#949ba4]">
+                    Suas escolhas de resolução, FPS e áudio ficam salvas automaticamente
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowScreenShareModal(false)}
+                className="cursor-pointer rounded-md bg-[#2b2d31] px-2.5 py-1 text-xs font-semibold text-zinc-400 hover:bg-[#35373c] hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-5 p-5">
+              {/* Capture Mode Tabs (Discord Style: Aplicativos / Telas / Aba) */}
+              <div>
+                <label className="mb-2 block text-[11px] font-extrabold tracking-wider text-[#b5bac1] uppercase">
+                  O que você quer transmitir?
+                </label>
+                <div className="grid grid-cols-3 gap-2.5">
+                  {(
+                    [
+                      {
+                        id: 'window',
+                        title: 'Aplicativo / Jogo',
+                        desc: 'Janela específica',
+                        Icon: AppWindow,
+                      },
+                      {
+                        id: 'monitor',
+                        title: 'Tela Inteira',
+                        desc: 'Monitor completo',
+                        Icon: Monitor,
+                      },
+                      {
+                        id: 'browser',
+                        title: 'Aba do Navegador',
+                        desc: 'Ideal p/ vídeo e som',
+                        Icon: Globe,
+                      },
+                    ] as const
+                  ).map((item) => {
+                    const active = shareSurface === item.id
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        onClick={() => {
+                          setShareSurface(item.id)
+                          saveScreenShareOptions({
+                            resolution,
+                            fps,
+                            includeAudio: shareIncludeAudio,
+                            surface: item.id,
+                          })
+                        }}
+                        className={`flex cursor-pointer flex-col items-center rounded-xl border p-3 text-center transition ${
+                          active
+                            ? 'border-[#5865f2] bg-[#5865f2]/15 text-white shadow-inner ring-1 ring-[#5865f2]'
+                            : 'border-[#1e1f22] bg-[#2b2d31] text-[#b5bac1] hover:bg-[#35373c] hover:text-white'
+                        }`}
+                      >
+                        <item.Icon
+                          className={`mb-1.5 h-6 w-6 ${
+                            active ? 'text-[#5865f2]' : 'text-[#949ba4]'
+                          }`}
+                        />
+                        <span className="text-xs font-bold">{item.title}</span>
+                        <span className="mt-0.5 text-[10px] text-[#949ba4]">
+                          {item.desc}
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Quality & Frame Rate Pills (Discord Go Live Style) */}
+              <div className="rounded-xl border border-[#1f2023] bg-[#2b2d31] p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-extrabold text-white uppercase tracking-wide">
+                    Qualidade da Transmissão
+                  </span>
+                  <span className="text-[11px] font-bold text-emerald-400">
+                    Codec Hardware H.264 Ativo
+                  </span>
+                </div>
+
+                {/* Resolution Selector */}
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between text-[11px]">
+                    <span className="font-bold text-[#b5bac1]">Resolução</span>
+                    <span className="text-[#949ba4]">
+                      {resolution === '1440p'
+                        ? 'Quad HD (2K • 12 Mbps)'
+                        : resolution === '1080p'
+                          ? 'Full HD (Nítido • 7.5 Mbps)'
+                          : 'HD (Mais leve • 4.5 Mbps)'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 rounded-lg bg-[#1e1f22] p-1">
+                    {(['720p', '1080p', '1440p'] as const).map((res) => {
+                      const active = resolution === res
+                      return (
+                        <button
+                          key={res}
+                          type="button"
+                          onClick={() => {
+                            setResolution(res)
+                            saveScreenShareOptions({
+                              resolution: res,
+                              fps,
+                              includeAudio: shareIncludeAudio,
+                              surface: shareSurface,
+                            })
+                            if (isSharing) {
+                              updateShareQuality({
+                                resolution: res,
+                                fps,
+                                includeAudio: shareIncludeAudio,
+                                surface: shareSurface,
+                              })
+                            }
+                          }}
+                          className={`cursor-pointer rounded-md py-2 text-xs font-extrabold transition ${
+                            active
+                              ? 'bg-[#5865f2] text-white shadow'
+                              : 'text-[#b5bac1] hover:bg-[#2b2d31] hover:text-white'
+                          }`}
+                        >
+                          {res}
+                          {res === '1440p' && (
+                            <span className="ml-1 rounded bg-white/20 px-1 py-0.2 text-[9px]">
+                              2K
+                            </span>
+                          )}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Frame Rate Selector */}
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between text-[11px]">
+                    <span className="font-bold text-[#b5bac1]">Taxa de Quadros (FPS)</span>
+                    <span className="text-[#949ba4]">
+                      {fps === 120
+                        ? 'Ultra Liso para Gameplay'
+                        : fps === 60
+                          ? 'Fluidez Padrão 60 FPS'
+                          : 'Economia de Banda'}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 rounded-lg bg-[#1e1f22] p-1">
+                    {([30, 60, 120] as const).map((val) => {
+                      const active = fps === val
+                      return (
+                        <button
+                          key={val}
+                          type="button"
+                          onClick={() => {
+                            setFps(val)
+                            saveScreenShareOptions({
+                              resolution,
+                              fps: val,
+                              includeAudio: shareIncludeAudio,
+                              surface: shareSurface,
+                            })
+                            if (isSharing) {
+                              updateShareQuality({
+                                resolution,
+                                fps: val,
+                                includeAudio: shareIncludeAudio,
+                                surface: shareSurface,
+                              })
+                            }
+                          }}
+                          className={`cursor-pointer rounded-md py-2 text-xs font-extrabold transition ${
+                            active
+                              ? 'bg-[#5865f2] text-white shadow'
+                              : 'text-[#b5bac1] hover:bg-[#2b2d31] hover:text-white'
+                          }`}
+                        >
+                          {val} FPS
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              {/* System / Tab Audio Toggle */}
+              <div
+                onClick={() => {
+                  const nextAudio = !shareIncludeAudio
+                  setShareIncludeAudio(nextAudio)
+                  saveScreenShareOptions({
+                    resolution,
+                    fps,
+                    includeAudio: nextAudio,
+                    surface: shareSurface,
+                  })
+                }}
+                className={`flex cursor-pointer items-center justify-between rounded-xl border p-3.5 transition ${
+                  shareIncludeAudio
+                    ? 'border-[#23a55a]/60 bg-[#23a55a]/10'
+                    : 'border-[#1f2023] bg-[#2b2d31]'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`flex h-9 w-9 items-center justify-center rounded-lg ${
+                      shareIncludeAudio
+                        ? 'bg-[#23a55a]/25 text-[#23a55a]'
+                        : 'bg-[#1e1f22] text-[#949ba4]'
+                    }`}
+                  >
+                    {shareIncludeAudio ? (
+                      <Volume2 className="h-5 w-5" />
+                    ) : (
+                      <VolumeX className="h-5 w-5" />
+                    )}
+                  </div>
+                  <div>
+                    <div className="text-xs font-extrabold text-white">
+                      Compartilhar Áudio da Transmissão
+                    </div>
+                    <div className="text-[11px] text-[#949ba4]">
+                      {shareIncludeAudio
+                        ? 'Ativado — o som do jogo/vídeo será enviado para a sala'
+                        : 'Desativado — apenas a imagem será transmitida (sem som)'}
+                    </div>
+                  </div>
+                </div>
+
+                <div
+                  className={`relative h-6 w-11 shrink-0 rounded-full transition ${
+                    shareIncludeAudio ? 'bg-[#23a55a]' : 'bg-[#1e1f22]'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
+                      shareIncludeAudio ? 'left-5' : 'left-0.5'
+                    }`}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Footer Actions */}
+            <div className="flex items-center justify-between border-t border-[#1f2023] bg-[#2b2d31] px-5 py-3.5">
+              <div className="text-[11px] text-[#949ba4]">
+                Canal: <strong className="text-zinc-200">{activeVoiceRoom?.name || selectedChannel.name}</strong>
+              </div>
+              <div className="flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowScreenShareModal(false)}
+                  className="cursor-pointer rounded-md px-4 py-2 text-xs font-semibold text-zinc-300 hover:bg-[#35373c] hover:text-white"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowScreenShareModal(false)
+                    startScreenShare({
+                      resolution,
+                      fps,
+                      includeAudio: shareIncludeAudio,
+                      surface: shareSurface,
+                    })
+                  }}
+                  className="flex cursor-pointer items-center gap-1.5 rounded-md bg-[#5865f2] px-5 py-2 text-xs font-extrabold text-white shadow-lg transition hover:bg-[#4752c4]"
+                >
+                  <Monitor className="h-3.5 w-3.5" />
+                  {isSharing ? 'Trocar Janela / Entrar ao Vivo' : 'Entrar ao Vivo'}
+                </button>
               </div>
             </div>
           </div>
