@@ -1,39 +1,60 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
+import confetti from 'canvas-confetti'
+import {
+  Monitor,
+  MonitorOff,
+  Mic,
+  MicOff,
+  Headphones,
+  VolumeX,
+  LogOut,
+  Users,
+  Radio,
+  Sparkles,
+  Flame,
+  Gamepad2,
+  Film,
+} from 'lucide-react'
 import { Room, UserProfile } from '@/types/community'
 import { useScreenShare, ScreenShareOptions, RemoteAudioItem } from '@/hooks/useScreenShare'
 import { VideoStage } from './VideoStage'
 import { ChatPanel } from './ChatPanel'
+import { COMMUNITY_SOUNDS } from '@/lib/soundEngine'
 import { createClient } from '@/lib/supabase/client'
 import type { User } from '@supabase/supabase-js'
 
 const ROOMS: Room[] = [
   {
-    id: 'world-1-resenha',
-    name: 'World 1 - Resenha',
-    description: 'Lobby principal dos Secos',
+    id: 'resenha',
+    name: 'Resenha',
+    description: 'Sala principal dos Secos',
     type: 'screen_voice',
+    icon: 'flame',
   },
   {
-    id: 'world-2-gameplay',
-    name: 'World 2 - Telagem',
-    description: 'Gameplay & Bossing',
+    id: 'gameplay',
+    name: 'Gameplay',
+    description: 'Telagem 1080p 60fps',
     type: 'screen_voice',
+    icon: 'gamepad',
   },
   {
-    id: 'world-3-cinema',
-    name: 'World 3 - Cinema',
-    description: 'Vídeos & Watch Party',
+    id: 'cinema',
+    name: 'Cinema',
+    description: 'Watch Party & Vídeos',
     type: 'screen_voice',
+    icon: 'film',
   },
 ]
 
 function extractDiscordProfile(authUser: User): UserProfile {
   const meta = authUser.user_metadata || {}
-  const discordIdentity = authUser.identities?.find((i) => i.provider === 'discord')?.identity_data || {}
+  const discordIdentity =
+    authUser.identities?.find((i) => i.provider === 'discord')?.identity_data || {}
 
-  // Exact Discord display name / username priority
   const discordUsername =
     meta.custom_claims?.global_name ||
     discordIdentity.custom_claims?.global_name ||
@@ -75,6 +96,7 @@ export function CommunityHub() {
   const [activeRoom, setActiveRoom] = useState<Room>(ROOMS[0])
   const [resolution, setResolution] = useState<ScreenShareOptions['resolution']>('1080p')
   const [fps, setFps] = useState<ScreenShareOptions['fps']>(60)
+  const [showSoundboard, setShowSoundboard] = useState(false)
 
   useEffect(() => {
     const supabase = createClient()
@@ -128,318 +150,400 @@ export function CommunityHub() {
     deafened,
     isSpeaking,
     speakingPeers,
+    lastSound,
     error,
     startScreenShare,
     stopScreenShare,
     toggleMic,
     toggleDeafen,
+    triggerSoundboard,
   } = useScreenShare(activeRoom.id, user)
+
+  // Fire confetti when someone triggers "clutch" sound
+  useEffect(() => {
+    if (lastSound?.soundId === 'clutch') {
+      confetti({
+        particleCount: 55,
+        spread: 60,
+        origin: { y: 0.75 },
+      })
+    }
+  }, [lastSound])
 
   const totalStreams = (localStream ? 1 : 0) + remoteStreams.length
 
-  // OSRS Login Screen (when not logged in with Discord)
+  const renderRoomIcon = (icon?: string) => {
+    switch (icon) {
+      case 'flame':
+        return <Flame className="h-3.5 w-3.5 text-amber-400" />
+      case 'gamepad':
+        return <Gamepad2 className="h-3.5 w-3.5 text-emerald-400" />
+      default:
+        return <Film className="h-3.5 w-3.5 text-purple-400" />
+    }
+  }
+
+  // Modern Animated Login Screen
   if (!loadingAuth && !user) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center p-4">
-        <div className="osrs-panel w-full max-w-md p-6 text-center">
-          <div className="mb-4 border-b-2 border-[#5c5040] pb-3">
-            <h1 className="text-3xl font-extrabold tracking-widest text-[#ffff00] osrs-text-shadow">
-              OS SECOS
-            </h1>
-            <p className="mt-1 text-xs text-[#ff981f] osrs-text-shadow">
-              OldSchool Community Hub • Tela & Voz Direto no Browser
-            </p>
+      <div className="relative flex min-h-screen w-full items-center justify-center overflow-hidden bg-zinc-950 p-4">
+        {/* Ambient Animated Glows */}
+        <div className="pointer-events-none absolute -top-40 left-1/2 h-96 w-96 -translate-x-1/2 rounded-full bg-amber-500/20 blur-[130px]" />
+        <div className="pointer-events-none absolute bottom-0 left-1/4 h-80 w-80 rounded-full bg-indigo-500/15 blur-[130px]" />
+
+        <motion.div
+          initial={{ opacity: 0, y: 20, scale: 0.96 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          transition={{ duration: 0.4, ease: 'easeOut' }}
+          className="relative z-10 w-full max-w-md rounded-3xl border border-white/10 bg-zinc-900/70 p-8 text-center shadow-2xl backdrop-blur-2xl"
+        >
+          <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-orange-600 text-2xl font-black text-zinc-950 shadow-xl shadow-amber-500/25">
+            OS
           </div>
 
-          <div className="osrs-inset mb-5 p-4 text-xs leading-relaxed text-[#c6b497]">
-            <p className="text-[#ffff00] font-bold mb-1">Bem-vindo ao Hub de Os Secos!</p>
-            <p>
-              Entre com sua conta do Discord para usar seu nick oficial da comunidade, assistir ou
-              transmitir sua tela sem travar o PC.
-            </p>
-          </div>
+          <h1 className="bg-gradient-to-r from-white via-zinc-100 to-zinc-400 bg-clip-text text-3xl font-extrabold tracking-tight text-transparent">
+            Os Secos
+          </h1>
+          <p className="mt-2 text-sm text-zinc-400">
+            Hub exclusivo da comunidade. Compartilhamento de tela em 60 FPS e voz direto no navegador.
+          </p>
 
-          <button
+          <motion.button
+            whileHover={{ scale: 1.02 }}
+            whileTap={{ scale: 0.98 }}
             onClick={handleDiscordLogin}
-            className="osrs-btn w-full py-3 text-sm uppercase tracking-wider"
+            className="mt-7 flex w-full cursor-pointer items-center justify-center gap-2.5 rounded-2xl bg-[#5865F2] py-3.5 text-sm font-bold text-white shadow-xl shadow-[#5865F2]/30 transition hover:bg-[#4752C4]"
           >
-            [ Entrar com Discord ]
-          </button>
-        </div>
+            <svg className="h-5 w-5 fill-current" viewBox="0 0 24 24">
+              <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03z" />
+            </svg>
+            Entrar com Discord
+          </motion.button>
+
+          <p className="mt-4 text-[11px] text-zinc-500">
+            Seu nick e avatar são sincronizados automaticamente com o Discord.
+          </p>
+        </motion.div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen w-full p-2 sm:p-4">
-      {/* Hidden audio players for continuous voice chat */}
+    <div className="relative flex min-h-screen w-full flex-col bg-zinc-950 text-zinc-100">
+      {/* Ambient Background Glows */}
+      <div className="pointer-events-none fixed -top-32 left-1/3 h-96 w-96 rounded-full bg-amber-500/10 blur-[140px]" />
+      <div className="pointer-events-none fixed right-10 bottom-10 h-80 w-80 rounded-full bg-orange-600/10 blur-[140px]" />
+
+      {/* Hidden Audio Players for Continuous Voice Call */}
       {remoteAudios.map((item) => (
         <RemoteVoicePlayer key={item.peerId} item={item} muted={deafened} />
       ))}
 
-      {/* Centered Responsive OldSchool Layout */}
-      <div className="mx-auto flex max-w-6xl flex-col gap-3">
-        {/* Top Banner Header */}
-        <header className="osrs-panel flex flex-wrap items-center justify-between gap-2 px-4 py-2.5">
+      {/* Top Glass Header */}
+      <header className="sticky top-0 z-30 border-b border-white/10 bg-zinc-950/75 px-4 py-3 backdrop-blur-xl sm:px-6">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
+          {/* Brand */}
           <div className="flex items-center gap-3">
-            <span className="text-xl font-extrabold tracking-wider text-[#ffff00] osrs-text-shadow">
-              ⚔️ OS SECOS
-            </span>
-            <span className="hidden text-xs text-[#00ff00] osrs-text-shadow sm:inline">
-              • {activeRoom.name} ({roomPeers.length} online)
-            </span>
+            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-amber-400 to-orange-600 font-black text-zinc-950 shadow-lg shadow-amber-500/20">
+              OS
+            </div>
+            <div>
+              <h1 className="text-sm font-extrabold tracking-tight text-white sm:text-base">
+                OS SECOS
+              </h1>
+              <p className="text-[11px] text-zinc-400">
+                {roomPeers.length} {roomPeers.length === 1 ? 'membro na sala' : 'membros na sala'}
+              </p>
+            </div>
           </div>
 
+          {/* Animated Room Pills */}
+          <nav className="flex items-center gap-1 rounded-2xl border border-white/10 bg-zinc-900/80 p-1">
+            {ROOMS.map((room) => {
+              const isActive = room.id === activeRoom.id
+              return (
+                <button
+                  key={room.id}
+                  onClick={() => setActiveRoom(room)}
+                  className={`relative flex cursor-pointer items-center gap-1.5 rounded-xl px-3.5 py-1.5 text-xs font-semibold transition ${
+                    isActive ? 'text-zinc-950' : 'text-zinc-400 hover:text-white'
+                  }`}
+                >
+                  {isActive && (
+                    <motion.div
+                      layoutId="activeRoomPill"
+                      transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                      className="absolute inset-0 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500"
+                    />
+                  )}
+                  <span className="relative z-10 flex items-center gap-1.5">
+                    {renderRoomIcon(room.icon)}
+                    {room.name}
+                  </span>
+                </button>
+              )
+            })}
+          </nav>
+
+          {/* Discord User Badge */}
           {user && (
-            <div className="flex items-center gap-2.5">
-              <div className="flex items-center gap-2 osrs-inset px-2.5 py-1">
+            <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 rounded-full border border-white/10 bg-zinc-900/90 py-1 pr-3 pl-1.5">
                 <img
                   src={user.avatar_url}
                   alt={user.username}
-                  className="h-5 w-5 border border-[#ff981f]"
+                  className={`h-6 w-6 rounded-full object-cover transition ${
+                    isSpeaking ? 'ring-2 ring-emerald-400' : 'ring-1 ring-white/20'
+                  }`}
                 />
-                <span className="text-xs font-bold text-[#ffff00] osrs-text-shadow">
-                  {user.username}
-                </span>
+                <span className="text-xs font-semibold text-white">{user.username}</span>
               </div>
-              <button onClick={handleLogout} className="osrs-btn px-2.5 py-1 text-xs">
-                Logout
+              <button
+                onClick={handleLogout}
+                className="cursor-pointer rounded-full border border-white/10 bg-zinc-900/80 p-2 text-zinc-400 transition hover:bg-white/10 hover:text-white"
+                title="Sair da conta"
+              >
+                <LogOut className="h-3.5 w-3.5" />
               </button>
             </div>
           )}
-        </header>
-
-        {/* Main 2-Column Responsive Area */}
-        <div className="grid grid-cols-1 gap-3 lg:grid-cols-4">
-          {/* Left Panel: World Select, Controls & Online Friends List */}
-          <aside className="flex flex-col gap-3 lg:col-span-1">
-            {/* World Selector */}
-            <div className="osrs-panel p-2.5">
-              <div className="mb-2 border-b border-[#5c5040] pb-1 text-xs font-bold text-[#ffff00] osrs-text-shadow">
-                Select World (Salas)
-              </div>
-              <div className="flex flex-col gap-1.5">
-                {ROOMS.map((room) => {
-                  const isActive = room.id === activeRoom.id
-                  return (
-                    <button
-                      key={room.id}
-                      onClick={() => setActiveRoom(room)}
-                      className={`osrs-btn px-2.5 py-1.5 text-left text-xs ${
-                        isActive ? 'osrs-btn-active' : ''
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span>{room.name}</span>
-                        {isActive && <span className="text-[#00ff00]">*</span>}
-                      </div>
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-
-            {/* Action Buttons (Screen Share & Mic) */}
-            <div className="osrs-panel p-2.5">
-              <div className="mb-2 border-b border-[#5c5040] pb-1 text-xs font-bold text-[#ffff00] osrs-text-shadow">
-                Controles de Tela & Voz
-              </div>
-
-              <div className="flex flex-col gap-2">
-                {!isSharing ? (
-                  <button
-                    onClick={() =>
-                      startScreenShare({ resolution, fps, includeAudio: true })
-                    }
-                    className="osrs-btn py-2 text-xs text-[#00ff00]"
-                  >
-                    [ Compartilhar Tela ]
-                  </button>
-                ) : (
-                  <button
-                    onClick={stopScreenShare}
-                    className="osrs-btn osrs-btn-active py-2 text-xs text-[#ff3333]"
-                  >
-                    [ Parar Transmissão ]
-                  </button>
-                )}
-
-                <div className="grid grid-cols-2 gap-1.5">
-                  <button
-                    onClick={toggleMic}
-                    className={`osrs-btn py-1.5 text-xs ${
-                      micEnabled ? 'text-[#00ff00]' : 'text-[#ff3333]'
-                    }`}
-                  >
-                    Mic: {micEnabled ? 'ON' : 'OFF'}
-                  </button>
-                  <button
-                    onClick={toggleDeafen}
-                    className={`osrs-btn py-1.5 text-xs ${
-                      !deafened ? 'text-[#00ff00]' : 'text-[#ff3333]'
-                    }`}
-                  >
-                    Áudio: {deafened ? 'MUTE' : 'ON'}
-                  </button>
-                </div>
-
-                {/* Simple Quality Dropdown */}
-                <div className="osrs-inset flex items-center justify-between px-2 py-1 text-[11px]">
-                  <span>Qualidade:</span>
-                  <select
-                    value={resolution}
-                    onChange={(e) =>
-                      setResolution(e.target.value as ScreenShareOptions['resolution'])
-                    }
-                    disabled={isSharing}
-                    className="bg-transparent font-bold text-[#ffff00] focus:outline-none"
-                  >
-                    <option value="720p" className="bg-[#1c1712]">
-                      720p
-                    </option>
-                    <option value="1080p" className="bg-[#1c1712]">
-                      1080p
-                    </option>
-                    <option value="1440p" className="bg-[#1c1712]">
-                      1440p
-                    </option>
-                  </select>
-                  <select
-                    value={fps}
-                    onChange={(e) =>
-                      setFps(Number(e.target.value) as ScreenShareOptions['fps'])
-                    }
-                    disabled={isSharing}
-                    className="bg-transparent font-bold text-[#ffff00] focus:outline-none"
-                  >
-                    <option value={30} className="bg-[#1c1712]">
-                      30 FPS
-                    </option>
-                    <option value={60} className="bg-[#1c1712]">
-                      60 FPS
-                    </option>
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            {/* Friends / Members Online List (OSRS Friends Tab style) */}
-            <div className="osrs-panel flex-1 p-2.5">
-              <div className="mb-2 flex items-center justify-between border-b border-[#5c5040] pb-1 text-xs font-bold text-[#ffff00] osrs-text-shadow">
-                <span>Friends List (Na Sala)</span>
-                <span className="text-[#00ff00]">{roomPeers.length}</span>
-              </div>
-
-              <div className="osrs-inset max-h-56 overflow-y-auto p-2 space-y-1.5">
-                {roomPeers.map((peer) => {
-                  const peerTalking =
-                    peer.id === user?.id ? isSpeaking : Boolean(speakingPeers[peer.id])
-                  const peerStreaming =
-                    peer.status === 'streaming' ||
-                    (peer.id === user?.id && isSharing) ||
-                    remoteStreams.some((s) => s.peerId === peer.id)
-
-                  return (
-                    <div
-                      key={peer.id}
-                      className="flex items-center justify-between text-xs py-0.5"
-                    >
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <img
-                          src={peer.avatar_url}
-                          alt={peer.username}
-                          className={`h-4 w-4 shrink-0 border ${
-                            peerTalking ? 'border-[#00ff00]' : 'border-[#5c5040]'
-                          }`}
-                        />
-                        <span
-                          className={`truncate font-bold osrs-text-shadow ${
-                            peerTalking ? 'text-[#00ff00]' : 'text-[#ffff00]'
-                          }`}
-                        >
-                          {peer.username}
-                        </span>
-                      </div>
-                      <span className="text-[10px] font-bold text-[#00ff00] osrs-text-shadow">
-                        {peerStreaming ? '[TELA]' : 'Online'}
-                      </span>
-                    </div>
-                  )
-                })}
-              </div>
-            </div>
-          </aside>
-
-          {/* Right Main Area: Screen Share Stage + Bottom Parchment Chat */}
-          <main className="flex flex-col gap-3 lg:col-span-3">
-            {error && (
-              <div className="osrs-panel border-[#ff3333] p-2 text-xs text-[#ff3333] osrs-text-shadow">
-                Erro: {error}
-              </div>
-            )}
-
-            {/* Video Stage Box */}
-            <div className="osrs-panel p-2.5">
-              <div className="mb-2 flex items-center justify-between border-b border-[#5c5040] pb-1 text-xs font-bold text-[#ffff00] osrs-text-shadow">
-                <span>Telas Transmitindo ({totalStreams})</span>
-                <span className="text-[11px] text-[#c6b497]">WebRTC Direto • Zero WebView</span>
-              </div>
-
-              {totalStreams === 0 ? (
-                <div className="osrs-inset flex min-h-[280px] flex-col items-center justify-center p-6 text-center sm:min-h-[360px]">
-                  <p className="text-sm font-bold text-[#ffff00] osrs-text-shadow">
-                    Nenhuma tela sendo transmitida em {activeRoom.name}
-                  </p>
-                  <p className="mt-1 max-w-md text-xs text-[#c6b497]">
-                    Clique no botão abaixo para abrir a tela do seu jogo ou navegador em até 1080p
-                    60 FPS.
-                  </p>
-                  <button
-                    onClick={() =>
-                      startScreenShare({ resolution, fps, includeAudio: true })
-                    }
-                    className="osrs-btn mt-4 px-5 py-2 text-xs text-[#00ff00]"
-                  >
-                    [ Iniciar Transmissão de Tela ]
-                  </button>
-                </div>
-              ) : (
-                <div
-                  className={`grid gap-3 ${
-                    totalStreams === 1 ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2'
-                  }`}
-                >
-                  {localStream && user && (
-                    <VideoStage
-                      stream={localStream}
-                      user={user}
-                      isLocal
-                      deafened={deafened}
-                    />
-                  )}
-                  {remoteStreams.map((item) => (
-                    <VideoStage
-                      key={item.peerId}
-                      stream={item.stream}
-                      user={item.user}
-                      deafened={deafened}
-                    />
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Classic OSRS Chat Box at the bottom */}
-            {user && (
-              <ChatPanel
-                roomId={activeRoom.id}
-                roomName={activeRoom.name}
-                currentUser={user}
-              />
-            )}
-          </main>
         </div>
-      </div>
+      </header>
+
+      {/* Main Content Container */}
+      <main className="mx-auto flex w-full max-w-7xl flex-1 flex-col gap-4 p-4 sm:p-6 lg:grid lg:grid-cols-12">
+        {/* Left/Center Column: Active Members Strip + Video Stage */}
+        <div className="flex flex-col gap-4 lg:col-span-8 xl:col-span-9">
+          {/* Online Members Strip */}
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-zinc-900/50 px-4 py-2.5 backdrop-blur-xl">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="mr-1 flex items-center gap-1.5 text-xs font-semibold text-zinc-400">
+                <Users className="h-3.5 w-3.5 text-amber-400" />
+                Na sala:
+              </span>
+
+              {roomPeers.map((peer) => {
+                const talking =
+                  peer.id === user?.id ? isSpeaking : Boolean(speakingPeers[peer.id])
+                const streaming =
+                  peer.status === 'streaming' ||
+                  (peer.id === user?.id && isSharing) ||
+                  remoteStreams.some((s) => s.peerId === peer.id)
+
+                return (
+                  <motion.div
+                    key={peer.id}
+                    layout
+                    className={`flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs transition ${
+                      talking
+                        ? 'border-emerald-500/60 bg-emerald-500/10 text-emerald-300 shadow-sm shadow-emerald-500/20'
+                        : 'border-white/10 bg-zinc-950/70 text-zinc-200'
+                    }`}
+                  >
+                    <img
+                      src={peer.avatar_url}
+                      alt={peer.username}
+                      className={`h-4 w-4 rounded-full object-cover ${
+                        talking ? 'ring-2 ring-emerald-400' : ''
+                      }`}
+                    />
+                    <span className="font-medium">{peer.username}</span>
+                    {streaming && (
+                      <span className="flex items-center gap-1 rounded-full bg-red-500/20 px-1.5 py-0.5 text-[9px] font-bold text-red-400">
+                        <Radio className="h-2.5 w-2.5 animate-pulse" />
+                        LIVE
+                      </span>
+                    )}
+                  </motion.div>
+                )
+              })}
+            </div>
+
+            {/* Stream Quality Selector */}
+            <div className="flex items-center gap-2 text-xs text-zinc-400">
+              <select
+                value={resolution}
+                onChange={(e) =>
+                  setResolution(e.target.value as ScreenShareOptions['resolution'])
+                }
+                disabled={isSharing}
+                className="rounded-lg border border-white/10 bg-zinc-950 px-2 py-1 text-xs font-semibold text-amber-400 focus:outline-none disabled:opacity-50"
+              >
+                <option value="720p">720p</option>
+                <option value="1080p">1080p</option>
+                <option value="1440p">1440p</option>
+              </select>
+              <select
+                value={fps}
+                onChange={(e) => setFps(Number(e.target.value) as ScreenShareOptions['fps'])}
+                disabled={isSharing}
+                className="rounded-lg border border-white/10 bg-zinc-950 px-2 py-1 text-xs font-semibold text-amber-400 focus:outline-none disabled:opacity-50"
+              >
+                <option value={30}>30 FPS</option>
+                <option value={60}>60 FPS</option>
+              </select>
+            </div>
+          </div>
+
+          {error && (
+            <div className="rounded-2xl border border-rose-500/30 bg-rose-500/10 px-4 py-2.5 text-xs text-rose-300">
+              {error}
+            </div>
+          )}
+
+          {/* Screen Share Stage */}
+          <div className="flex-1">
+            {totalStreams === 0 ? (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex min-h-[340px] flex-col items-center justify-center rounded-3xl border border-white/10 bg-gradient-to-b from-zinc-900/60 to-zinc-950/80 p-8 text-center backdrop-blur-xl sm:min-h-[420px]"
+              >
+                <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-500/10 ring-1 ring-amber-500/30 shadow-inner">
+                  <Monitor className="h-8 w-8 text-amber-400" />
+                </div>
+                <h2 className="text-lg font-bold text-white">
+                  Nenhuma tela transmitindo em {activeRoom.name}
+                </h2>
+                <p className="mt-1 max-w-md text-xs leading-relaxed text-zinc-400">
+                  Transmita sua gameplay, vídeo ou área de trabalho em até{' '}
+                  <span className="font-semibold text-amber-400">1080p/1440p 60 FPS</span> direto no
+                  navegador sem pesar o PC.
+                </p>
+
+                <motion.button
+                  whileHover={{ scale: 1.03 }}
+                  whileTap={{ scale: 0.97 }}
+                  onClick={() =>
+                    startScreenShare({ resolution, fps, includeAudio: true })
+                  }
+                  className="mt-6 flex cursor-pointer items-center gap-2 rounded-2xl bg-gradient-to-r from-amber-400 to-orange-500 px-6 py-3 text-xs font-extrabold text-zinc-950 shadow-xl shadow-amber-500/25"
+                >
+                  <Monitor className="h-4 w-4" />
+                  Compartilhar Minha Tela
+                </motion.button>
+              </motion.div>
+            ) : (
+              <div
+                className={`grid gap-4 ${
+                  totalStreams === 1 ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-2'
+                }`}
+              >
+                {localStream && user && (
+                  <VideoStage
+                    stream={localStream}
+                    user={user}
+                    isLocal
+                    deafened={deafened}
+                  />
+                )}
+                {remoteStreams.map((item) => (
+                  <VideoStage
+                    key={item.peerId}
+                    stream={item.stream}
+                    user={item.user}
+                    deafened={deafened}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Floating Control Dock */}
+          <div className="relative flex flex-col items-center">
+            <AnimatePresence>
+              {showSoundboard && (
+                <motion.div
+                  initial={{ opacity: 0, y: 12, scale: 0.95 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  exit={{ opacity: 0, y: 12, scale: 0.95 }}
+                  className="mb-3 flex flex-wrap items-center justify-center gap-2 rounded-2xl border border-white/10 bg-zinc-900/95 p-2.5 shadow-2xl backdrop-blur-xl"
+                >
+                  {COMMUNITY_SOUNDS.map((snd) => (
+                    <button
+                      key={snd.id}
+                      onClick={() => triggerSoundboard(snd.id)}
+                      className="flex cursor-pointer items-center gap-1.5 rounded-xl border border-white/10 bg-zinc-950/80 px-3 py-1.5 text-xs font-medium text-zinc-200 transition hover:border-amber-500/40 hover:bg-white/10"
+                    >
+                      <span>{snd.emoji}</span>
+                      <span>{snd.label}</span>
+                    </button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            <div className="flex flex-wrap items-center justify-center gap-2.5 rounded-2xl border border-white/10 bg-zinc-900/80 px-4 py-2.5 shadow-2xl backdrop-blur-xl">
+              <button
+                onClick={toggleMic}
+                className={`flex cursor-pointer items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition ${
+                  micEnabled
+                    ? 'bg-emerald-500/20 text-emerald-300 ring-1 ring-emerald-500/40'
+                    : 'bg-white/5 text-zinc-300 hover:bg-white/10'
+                }`}
+              >
+                {micEnabled ? <Mic className="h-4 w-4" /> : <MicOff className="h-4 w-4 text-rose-400" />}
+                {micEnabled ? 'Mic Ativo' : 'Ativar Mic'}
+              </button>
+
+              <button
+                onClick={toggleDeafen}
+                className={`flex cursor-pointer items-center gap-2 rounded-xl px-3.5 py-2 text-xs font-bold transition ${
+                  deafened
+                    ? 'bg-rose-500/20 text-rose-300 ring-1 ring-rose-500/40'
+                    : 'bg-white/5 text-zinc-300 hover:bg-white/10'
+                }`}
+              >
+                {deafened ? <VolumeX className="h-4 w-4" /> : <Headphones className="h-4 w-4" />}
+                {deafened ? 'Mutado' : 'Áudio'}
+              </button>
+
+              {!isSharing ? (
+                <button
+                  onClick={() =>
+                    startScreenShare({ resolution, fps, includeAudio: true })
+                  }
+                  className="flex cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-5 py-2 text-xs font-extrabold text-zinc-950 shadow-lg shadow-amber-500/20 transition hover:brightness-110"
+                >
+                  <Monitor className="h-4 w-4" />
+                  Transmitir Tela
+                </button>
+              ) : (
+                <button
+                  onClick={stopScreenShare}
+                  className="flex cursor-pointer items-center gap-2 rounded-xl bg-rose-500 px-5 py-2 text-xs font-extrabold text-white shadow-lg shadow-rose-500/25 transition hover:bg-rose-600"
+                >
+                  <MonitorOff className="h-4 w-4" />
+                  Parar Tela
+                </button>
+              )}
+
+              <button
+                onClick={() => setShowSoundboard((s) => !s)}
+                className={`flex cursor-pointer items-center gap-1.5 rounded-xl px-3.5 py-2 text-xs font-bold transition ${
+                  showSoundboard
+                    ? 'bg-amber-500/20 text-amber-300 ring-1 ring-amber-500/40'
+                    : 'bg-white/5 text-zinc-300 hover:bg-white/10'
+                }`}
+              >
+                <Sparkles className="h-4 w-4 text-amber-400" />
+                Sons
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column: Real-Time Chat */}
+        <div className="lg:col-span-4 xl:col-span-3">
+          {user && (
+            <ChatPanel
+              roomId={activeRoom.id}
+              roomName={activeRoom.name}
+              currentUser={user}
+            />
+          )}
+        </div>
+      </main>
     </div>
   )
 }
