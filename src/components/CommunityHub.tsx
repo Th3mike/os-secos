@@ -197,8 +197,12 @@ export function CommunityHub() {
           transition={{ duration: 0.4, ease: 'easeOut' }}
           className="relative z-10 w-full max-w-md rounded-3xl border border-white/10 bg-zinc-900/70 p-8 text-center shadow-2xl backdrop-blur-2xl"
         >
-          <div className="mx-auto mb-5 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-orange-600 text-2xl font-black text-zinc-950 shadow-xl shadow-amber-500/25">
-            OS
+          <div className="mx-auto mb-5 flex h-28 w-28 items-center justify-center overflow-hidden rounded-full border-2 border-amber-500/40 bg-zinc-950 shadow-2xl shadow-amber-500/20">
+            <img
+              src="/logo.png"
+              alt="Os Secos Logo"
+              className="h-full w-full object-cover"
+            />
           </div>
 
           <h1 className="bg-gradient-to-r from-white via-zinc-100 to-zinc-400 bg-clip-text text-3xl font-extrabold tracking-tight text-transparent">
@@ -244,9 +248,11 @@ export function CommunityHub() {
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3">
           {/* Brand */}
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-amber-400 to-orange-600 font-black text-zinc-950 shadow-lg shadow-amber-500/20">
-              OS
-            </div>
+            <img
+              src="/logo.png"
+              alt="Os Secos Logo"
+              className="h-10 w-10 rounded-full border border-amber-500/40 object-cover shadow-lg shadow-amber-500/20"
+            />
             <div>
               <h1 className="text-sm font-extrabold tracking-tight text-white sm:text-base">
                 OS SECOS
@@ -399,8 +405,12 @@ export function CommunityHub() {
                 animate={{ opacity: 1, y: 0 }}
                 className="flex min-h-[340px] flex-col items-center justify-center rounded-3xl border border-white/10 bg-gradient-to-b from-zinc-900/60 to-zinc-950/80 p-8 text-center backdrop-blur-xl sm:min-h-[420px]"
               >
-                <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-500/10 ring-1 ring-amber-500/30 shadow-inner">
-                  <Monitor className="h-8 w-8 text-amber-400" />
+                <div className="mb-4 flex h-24 w-24 items-center justify-center overflow-hidden rounded-full border border-amber-500/30 bg-zinc-950 shadow-2xl shadow-amber-500/15">
+                  <img
+                    src="/logo.png"
+                    alt="Os Secos"
+                    className="h-full w-full object-cover opacity-90"
+                  />
                 </div>
                 <h2 className="text-lg font-bold text-white">
                   Nenhuma tela transmitindo em {activeRoom.name}
