@@ -1183,16 +1183,10 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       if (localStreamRef.current) {
         const [videoTrack] = localStreamRef.current.getVideoTracks()
         if (videoTrack) {
-          try {
-            await videoTrack.applyConstraints({
-              width: { ideal: widthMap[options.resolution] },
-              height: { ideal: heightMap[options.resolution] },
-              frameRate: { ideal: options.fps },
-            })
-            videoTrack.contentHint = 'motion'
-          } catch {
-            // ignore
-          }
+          // NOTE: Do NOT call videoTrack.applyConstraints({ width, height, frameRate }) on a live
+          // getDisplayMedia track in Windows Edge/Chromium! Re-configuring WGC/DXGI capture dimensions
+          // while live leaks DWM desktop duplication handles and spikes explorer.exe CPU/power!
+          videoTrack.contentHint = 'motion'
         }
       }
 

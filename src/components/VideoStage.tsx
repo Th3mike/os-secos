@@ -34,6 +34,7 @@ export function VideoStage({
   const [muted, setMuted] = useState(isLocal)
   const [volume, setVolume] = useState(1)
   const [showViewersPopover, setShowViewersPopover] = useState(false)
+  const [pauseLocalPreview, setPauseLocalPreview] = useState(false)
   const [liveStats, setLiveStats] = useState<{
     width: number
     height: number
@@ -57,9 +58,10 @@ export function VideoStage({
     }
 
     const updateMetadataStats = () => {
-      const settings = stream.getVideoTracks()[0]?.getSettings()
-      const configuredFps = targetFps || Math.round(settings?.frameRate || 60)
-      const rawHeight = videoEl.videoHeight || settings?.height || 1080
+      // Never call videoTrack.getSettings() on a timer! On Windows Edge/Chromium,
+      // querying WGC/DXGI track settings wakes up DWM/explorer.exe. Read videoWidth/videoHeight from the DOM element only.
+      const configuredFps = targetFps || 60
+      const rawHeight = videoEl.videoHeight || 1080
       const stableHeight =
         targetResolution === '1440p'
           ? 1440
@@ -76,7 +78,7 @@ export function VideoStage({
                     : 1080
 
       setLiveStats({
-        width: videoEl.videoWidth || settings?.width || 1920,
+        width: videoEl.videoWidth || 1920,
         height: stableHeight,
         fps: configuredFps,
       })
@@ -91,20 +93,16 @@ export function VideoStage({
     }
 
     videoEl.addEventListener('loadedmetadata', handleLoadedMetadata)
+    videoEl.addEventListener('resize', updateMetadataStats)
 
     const tracks = stream.getVideoTracks()
     tracks.forEach((t) => {
       t.onunmute = ensurePlay
     })
 
-    // Lightweight 4-second metadata poll (NO requestVideoFrameCallback loop!)
-    // Running requestVideoFrameCallback at 60-120Hz on Windows Edge/Chromium locks DWM/DXGI surface handles
-    // and causes Windows explorer.exe CPU to spike and freeze!
-    const statsTimer = setInterval(updateMetadataStats, 4000)
-
     return () => {
-      clearInterval(statsTimer)
       videoEl.removeEventListener('loadedmetadata', handleLoadedMetadata)
+      videoEl.removeEventListener('resize', updateMetadataStats)
       tracks.forEach((t) => {
         t.onunmute = null
       })
@@ -261,14 +259,41 @@ export function VideoStage({
       </div>
 
       {/* Video Element fills adjustable stage cleanly without extra DWM composite layers */}
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted={isLocal || muted || deafened}
-        onClick={onToggleFocus}
-        className="h-full w-full flex-1 cursor-pointer bg-black object-contain"
-      />
+      {isLocal && pauseLocalPreview ? (
+        <div
+          onClick={onToggleFocus}
+          className="flex h-full w-full flex-1 cursor-pointer flex-col items-center justify-center bg-[#111214] p-6 text-center select-none"
+        >
+          <div className="mb-2 rounded-full bg-emerald-500/15 px-3 py-1 text-xs font-extrabold text-emerald-400 ring-1 ring-emerald-500/30">
+            ⚡ MODO LEVE ATIVO (ECONOMIA DE ENERGIA / EXPLORER)
+          </div>
+          <p className="text-sm font-bold text-white">
+            Sua tela está sendo transmitida em {liveStats.height}p @ {liveStats.fps} FPS
+          </p>
+          <p className="mt-1 max-w-md text-xs text-zinc-400">
+            A pré-visualização local foi ocultada para zerar o uso do Windows Explorer / DWM enquanto você joga ou transmite.
+          </p>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              setPauseLocalPreview(false)
+            }}
+            className="mt-4 cursor-pointer rounded-md bg-[#2b2d31] px-3.5 py-1.5 text-xs font-bold text-zinc-200 hover:bg-[#35373c] hover:text-white"
+          >
+            Mostrar Prévia da Minha Tela
+          </button>
+        </div>
+      ) : (
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted={isLocal || muted || deafened}
+          onClick={onToggleFocus}
+          className="h-full w-full flex-1 cursor-pointer bg-black object-contain"
+        />
+      )}
 
       {/* Bottom Controls Bar */}
       <div className="absolute right-2.5 bottom-2.5 left-2.5 z-10 flex flex-wrap items-center justify-between gap-2 rounded-md bg-[#111214]/90 px-3 py-1.5 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
@@ -303,6 +328,20 @@ export function VideoStage({
         </div>
 
         <div className="flex items-center gap-1.5">
+          {isLocal && !isWebcam && (
+            <button
+              type="button"
+              onClick={() => setPauseLocalPreview((p) => !p)}
+              className={`cursor-pointer rounded px-2.5 py-1 text-[11px] font-bold transition ${
+                pauseLocalPreview
+                  ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                  : 'bg-[#2b2d31] text-emerald-400 hover:bg-[#35373c]'
+              }`}
+              title="Oculta a pré-visualização para você (os amigos continuam vendo normal) e reduz o uso de GPU/Explorer no seu PC"
+            >
+              {pauseLocalPreview ? 'Ver Prévia' : '⚡ Modo Leve (Ocultar Prévia)'}
+            </button>
+          )}
           {onToggleFocus && (
             <button
               type="button"

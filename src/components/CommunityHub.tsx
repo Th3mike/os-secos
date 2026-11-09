@@ -16,6 +16,8 @@ import {
   Volume2,
   VolumeX,
   Sparkles,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import { Room, UserProfile, Role, ChatMessage, PrankType } from '@/types/community'
 import {
@@ -302,6 +304,7 @@ export function CommunityHub() {
   const [voiceChatOpen, setVoiceChatOpen] = useState(false)
   const [showMembersSidebar, setShowMembersSidebar] = useState(true)
   const [showWatchTogether, setShowWatchTogether] = useState(false)
+  const [controlsCollapsed, setControlsCollapsed] = useState(false)
   const [focusedStreamId, setFocusedStreamId] = useState<string | null>(null)
   const [stageHeightPct, setStageHeightPct] = useState<number>(75)
 
@@ -1963,161 +1966,225 @@ export function CommunityHub() {
               )}
             </div>
 
-            {/* Bottom Discord Call Control Bar */}
-            <div className="flex h-16 shrink-0 flex-wrap items-center justify-center gap-2 border-t border-[#111214] bg-[#232428] px-4">
-              <button
-                type="button"
-                onClick={toggleMic}
-                className={`flex cursor-pointer items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold transition ${
-                  micEnabled
-                    ? 'bg-[#2b2d31] text-white hover:bg-[#35373c]'
-                    : 'bg-[#da373c] text-white hover:bg-[#a1282c]'
-                }`}
-              >
-                {micEnabled ? (
-                  <Mic className="h-4 w-4" />
-                ) : (
-                  <MicOff className="h-4 w-4" />
-                )}
-                {micEnabled ? 'Microfone' : 'Mutado'}
-              </button>
-
-              <button
-                type="button"
-                onClick={toggleDeafen}
-                className={`flex cursor-pointer items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold transition ${
-                  !deafened
-                    ? 'bg-[#2b2d31] text-white hover:bg-[#35373c]'
-                    : 'bg-[#da373c] text-white hover:bg-[#a1282c]'
-                }`}
-              >
-                {deafened ? (
-                  <HeadphoneOff className="h-4 w-4" />
-                ) : (
-                  <Headphones className="h-4 w-4" />
-                )}
-                {deafened ? 'Áudio: OFF' : 'Áudio: ON'}
-              </button>
-
-              <button
-                type="button"
-                onClick={() =>
-                  updateMicSettings({
-                    mode:
-                      micSettings.mode === 'krisp'
-                        ? 'standard'
-                        : micSettings.mode === 'standard'
-                        ? 'off'
-                        : 'krisp',
-                  })
-                }
-                title="Alternar Supressão de Ruído (Krisp / Padrão / Desativado)"
-                className={`flex cursor-pointer items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-bold transition ${
-                  micSettings.mode === 'krisp'
-                    ? 'bg-[#23a55a]/20 text-[#23a55a] ring-1 ring-[#23a55a]/50 hover:bg-[#23a55a]/30'
-                    : micSettings.mode === 'standard'
-                    ? 'bg-[#5865f2]/20 text-[#949cf7] ring-1 ring-[#5865f2]/50 hover:bg-[#5865f2]/30'
-                    : 'bg-[#2b2d31] text-zinc-400 hover:bg-[#35373c]'
-                }`}
-              >
-                <AudioWaveform className="h-4 w-4" />
-                <span>
-                  {micSettings.mode === 'krisp'
-                    ? 'Ruído: Krisp'
-                    : micSettings.mode === 'standard'
-                    ? 'Ruído: Padrão'
-                    : 'Ruído: OFF'}
-                </span>
-              </button>
-
-              <button
-                type="button"
-                onClick={toggleWebcam}
-                className={`flex cursor-pointer items-center gap-2 rounded-full px-4 py-2 text-xs font-bold transition ${
-                  webcamEnabled
-                    ? 'bg-amber-600 text-white hover:bg-amber-700'
-                    : 'bg-[#2b2d31] text-white hover:bg-[#35373c]'
-                }`}
-                title="Mostrar sua webcam (pode usar junto com o compartilhamento de tela!)"
-              >
-                {webcamEnabled ? (
-                  <CameraOff className="h-4 w-4" />
-                ) : (
-                  <Camera className="h-4 w-4" />
-                )}
-                {webcamEnabled ? 'Esconder a Kabeka' : 'Mostrar a Kabeka'}
-              </button>
-
-              {!isSharing ? (
+            {/* Bottom Discord Call Control Bar (Expandable / Collapsible) */}
+            {controlsCollapsed ? (
+              <div className="flex h-9 shrink-0 items-center justify-center gap-2 border-t border-[#111214] bg-[#232428] px-4">
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowWatchTogether(false)
-                    setShowScreenShareModal(true)
-                  }}
-                  className="cursor-pointer rounded-full bg-[#23a55a] px-5 py-2 text-xs font-bold text-white hover:bg-[#1a7f44]"
+                  onClick={toggleMic}
+                  className={`flex cursor-pointer items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
+                    micEnabled
+                      ? 'bg-[#2b2d31] text-white hover:bg-[#35373c]'
+                      : 'bg-[#da373c] text-white hover:bg-[#a1282c]'
+                  }`}
+                  title={micEnabled ? 'Mutar Microfone' : 'Ativar Microfone'}
                 >
-                  Compartilhar Tela
+                  {micEnabled ? <Mic className="h-3.5 w-3.5" /> : <MicOff className="h-3.5 w-3.5" />}
                 </button>
-              ) : (
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setShowScreenShareModal(true)}
-                    className="cursor-pointer rounded-full bg-[#2b2d31] px-3.5 py-2 text-xs font-semibold text-zinc-200 hover:bg-[#35373c]"
-                    title="Alterar qualidade, FPS, áudio ou trocar janela"
-                  >
-                    Qualidade ({resolution} {fps}fps)
-                  </button>
+
+                <button
+                  type="button"
+                  onClick={toggleDeafen}
+                  className={`flex cursor-pointer items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-semibold transition ${
+                    !deafened
+                      ? 'bg-[#2b2d31] text-white hover:bg-[#35373c]'
+                      : 'bg-[#da373c] text-white hover:bg-[#a1282c]'
+                  }`}
+                  title={deafened ? 'Ativar Áudio' : 'Desativar Áudio'}
+                >
+                  {deafened ? (
+                    <HeadphoneOff className="h-3.5 w-3.5" />
+                  ) : (
+                    <Headphones className="h-3.5 w-3.5" />
+                  )}
+                </button>
+
+                {isSharing && (
                   <button
                     type="button"
                     onClick={stopScreenShare}
-                    className="cursor-pointer rounded-full bg-[#da373c] px-5 py-2 text-xs font-bold text-white hover:bg-[#a1282c]"
+                    className="cursor-pointer rounded-full bg-[#da373c] px-3 py-1 text-[11px] font-bold text-white hover:bg-[#a1282c]"
                   >
-                    Parar Transmissão
+                    Parar Tela
                   </button>
-                </div>
-              )}
-
-              <button
-                type="button"
-                onClick={() => setShowWatchTogether((w) => !w)}
-                className={`flex cursor-pointer items-center gap-1.5 rounded-full px-4 py-2 text-xs font-semibold transition ${
-                  showWatchTogether || watchState?.active
-                    ? 'bg-[#5865f2] text-white'
-                    : 'bg-[#2b2d31] text-zinc-200 hover:bg-[#35373c]'
-                }`}
-              >
-                <Tv className="h-3.5 w-3.5" />
-                Watch Together
-              </button>
-
-              <button
-                type="button"
-                onClick={handleToggleVoiceChat}
-                className={`relative cursor-pointer rounded-full px-4 py-2 text-xs font-semibold transition ${
-                  voiceChatOpen
-                    ? 'bg-[#5865f2] text-white'
-                    : 'bg-[#2b2d31] text-zinc-200 hover:bg-[#35373c]'
-                }`}
-              >
-                Chat da Sala
-                {voiceUnread > 0 && !voiceChatOpen && (
-                  <span className="ml-1.5 rounded-full bg-[#da373c] px-1.5 py-0.2 text-[10px] font-bold text-white">
-                    {voiceUnread}
-                  </span>
                 )}
-              </button>
 
-              <button
-                type="button"
-                onClick={handleDisconnectVoice}
-                className="cursor-pointer rounded-full bg-[#da373c] px-4 py-2 text-xs font-bold text-white hover:bg-[#a1282c]"
-                title="Sair da Sala de Voz"
-              >
-                Desconectar
-              </button>
-            </div>
+                <button
+                  type="button"
+                  onClick={() => setControlsCollapsed(false)}
+                  className="flex cursor-pointer items-center gap-1.5 rounded-full bg-[#2b2d31] px-3.5 py-1 text-[11px] font-bold text-zinc-200 transition hover:bg-[#35373c] hover:text-white"
+                  title="Expandir barra de controles da call"
+                >
+                  <ChevronUp className="h-3.5 w-3.5 text-emerald-400" />
+                  <span>Expandir Menu da Call</span>
+                </button>
+              </div>
+            ) : (
+              <div className="relative flex min-h-16 shrink-0 flex-wrap items-center justify-center gap-2 border-t border-[#111214] bg-[#232428] px-4 py-2">
+                <button
+                  type="button"
+                  onClick={toggleMic}
+                  className={`flex cursor-pointer items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold transition ${
+                    micEnabled
+                      ? 'bg-[#2b2d31] text-white hover:bg-[#35373c]'
+                      : 'bg-[#da373c] text-white hover:bg-[#a1282c]'
+                  }`}
+                >
+                  {micEnabled ? (
+                    <Mic className="h-4 w-4" />
+                  ) : (
+                    <MicOff className="h-4 w-4" />
+                  )}
+                  {micEnabled ? 'Microfone' : 'Mutado'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={toggleDeafen}
+                  className={`flex cursor-pointer items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold transition ${
+                    !deafened
+                      ? 'bg-[#2b2d31] text-white hover:bg-[#35373c]'
+                      : 'bg-[#da373c] text-white hover:bg-[#a1282c]'
+                  }`}
+                >
+                  {deafened ? (
+                    <HeadphoneOff className="h-4 w-4" />
+                  ) : (
+                    <Headphones className="h-4 w-4" />
+                  )}
+                  {deafened ? 'Áudio: OFF' : 'Áudio: ON'}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() =>
+                    updateMicSettings({
+                      mode:
+                        micSettings.mode === 'krisp'
+                          ? 'standard'
+                          : micSettings.mode === 'standard'
+                          ? 'off'
+                          : 'krisp',
+                    })
+                  }
+                  title="Alternar Supressão de Ruído (Krisp / Padrão / Desativado)"
+                  className={`flex cursor-pointer items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-bold transition ${
+                    micSettings.mode === 'krisp'
+                      ? 'bg-[#23a55a]/20 text-[#23a55a] ring-1 ring-[#23a55a]/50 hover:bg-[#23a55a]/30'
+                      : micSettings.mode === 'standard'
+                      ? 'bg-[#5865f2]/20 text-[#949cf7] ring-1 ring-[#5865f2]/50 hover:bg-[#5865f2]/30'
+                      : 'bg-[#2b2d31] text-zinc-400 hover:bg-[#35373c]'
+                  }`}
+                >
+                  <AudioWaveform className="h-4 w-4" />
+                  <span>
+                    {micSettings.mode === 'krisp'
+                      ? 'Ruído: Krisp'
+                      : micSettings.mode === 'standard'
+                      ? 'Ruído: Padrão'
+                      : 'Ruído: OFF'}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={toggleWebcam}
+                  className={`flex cursor-pointer items-center gap-2 rounded-full px-4 py-2 text-xs font-bold transition ${
+                    webcamEnabled
+                      ? 'bg-amber-600 text-white hover:bg-amber-700'
+                      : 'bg-[#2b2d31] text-white hover:bg-[#35373c]'
+                  }`}
+                  title="Mostrar sua webcam (pode usar junto com o compartilhamento de tela!)"
+                >
+                  {webcamEnabled ? (
+                    <CameraOff className="h-4 w-4" />
+                  ) : (
+                    <Camera className="h-4 w-4" />
+                  )}
+                  {webcamEnabled ? 'Esconder a Kabeka' : 'Mostrar a Kabeka'}
+                </button>
+
+                {!isSharing ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowWatchTogether(false)
+                      setShowScreenShareModal(true)
+                    }}
+                    className="cursor-pointer rounded-full bg-[#23a55a] px-5 py-2 text-xs font-bold text-white hover:bg-[#1a7f44]"
+                  >
+                    Compartilhar Tela
+                  </button>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setShowScreenShareModal(true)}
+                      className="cursor-pointer rounded-full bg-[#2b2d31] px-3.5 py-2 text-xs font-semibold text-zinc-200 hover:bg-[#35373c]"
+                      title="Alterar qualidade, FPS, áudio ou trocar janela"
+                    >
+                      Qualidade ({resolution} {fps}fps)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={stopScreenShare}
+                      className="cursor-pointer rounded-full bg-[#da373c] px-5 py-2 text-xs font-bold text-white hover:bg-[#a1282c]"
+                    >
+                      Parar Transmissão
+                    </button>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setShowWatchTogether((w) => !w)}
+                  className={`flex cursor-pointer items-center gap-1.5 rounded-full px-4 py-2 text-xs font-semibold transition ${
+                    showWatchTogether || watchState?.active
+                      ? 'bg-[#5865f2] text-white'
+                      : 'bg-[#2b2d31] text-zinc-200 hover:bg-[#35373c]'
+                  }`}
+                >
+                  <Tv className="h-3.5 w-3.5" />
+                  Watch Together
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleToggleVoiceChat}
+                  className={`relative cursor-pointer rounded-full px-4 py-2 text-xs font-semibold transition ${
+                    voiceChatOpen
+                      ? 'bg-[#5865f2] text-white'
+                      : 'bg-[#2b2d31] text-zinc-200 hover:bg-[#35373c]'
+                  }`}
+                >
+                  Chat da Sala
+                  {voiceUnread > 0 && !voiceChatOpen && (
+                    <span className="ml-1.5 rounded-full bg-[#da373c] px-1.5 py-0.2 text-[10px] font-bold text-white">
+                      {voiceUnread}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDisconnectVoice}
+                  className="cursor-pointer rounded-full bg-[#da373c] px-4 py-2 text-xs font-bold text-white hover:bg-[#a1282c]"
+                  title="Sair da Sala de Voz"
+                >
+                  Desconectar
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setControlsCollapsed(true)}
+                  className="flex cursor-pointer items-center gap-1 rounded-full bg-[#1e1f22] px-3 py-2 text-xs font-semibold text-zinc-400 transition hover:bg-[#35373c] hover:text-white"
+                  title="Encolher menu de controles para dar mais espaço à tela"
+                >
+                  <ChevronDown className="h-4 w-4" />
+                  <span className="hidden sm:inline">Encolher</span>
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -2663,6 +2730,20 @@ export function CommunityHub() {
                     }`}
                   />
                 </div>
+              </div>
+
+              {/* Anti-Explorer Lag & Yellow Border Tip for Windows Edge/Chrome */}
+              <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-[11px] text-amber-200/90">
+                <div className="font-extrabold text-amber-300">
+                  💡 Dica para tirar a borda amarela e zerar o uso do Windows Explorer:
+                </div>
+                <p className="mt-0.5 text-[10px] leading-relaxed text-zinc-300">
+                  No Edge ou Chrome, cole{' '}
+                  <code className="rounded bg-black/50 px-1.5 py-0.5 font-mono text-amber-300 select-all">
+                    edge://flags/#enable-wgc-screen-capture
+                  </code>{' '}
+                  (ou <code className="rounded bg-black/50 px-1 py-0.5 font-mono text-amber-300 select-all">chrome://flags/#enable-wgc-screen-capture</code>) na barra de endereço e mude para <strong>Disabled</strong>. Isso desativa a borda amarela do Windows e usa DirectX puro sem pesar no <code className="font-mono">explorer.exe</code>!
+                </p>
               </div>
             </div>
 
