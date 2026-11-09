@@ -1,7 +1,16 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Mic, MicOff, Headphones, HeadphoneOff, Tv, AudioWaveform } from 'lucide-react'
+import {
+  Mic,
+  MicOff,
+  Headphones,
+  HeadphoneOff,
+  Tv,
+  AudioWaveform,
+  Camera,
+  CameraOff,
+} from 'lucide-react'
 import { Room, UserProfile, Role, ChatMessage, PrankType } from '@/types/community'
 import {
   useScreenShare,
@@ -214,6 +223,34 @@ function RemoteVoicePlayer({
   return <audio ref={audioRef} autoPlay playsInline muted={muted} className="hidden" />
 }
 
+function PeerWebcamVideo({
+  stream,
+  mirrored = false,
+  className = '',
+}: {
+  stream: MediaStream
+  mirrored?: boolean
+  className?: string
+}) {
+  const ref = useRef<HTMLVideoElement | null>(null)
+  useEffect(() => {
+    if (ref.current && ref.current.srcObject !== stream) {
+      ref.current.srcObject = stream
+      ref.current.play().catch(() => {})
+    }
+  }, [stream])
+  return (
+    <video
+      ref={ref}
+      autoPlay
+      playsInline
+      muted
+      style={{ transform: mirrored ? 'scaleX(-1)' : undefined }}
+      className={className}
+    />
+  )
+}
+
 export function CommunityHub() {
   const [user, setUser] = useState<UserProfile | null>(null)
   const [loadingAuth, setLoadingAuth] = useState(true)
@@ -355,7 +392,10 @@ export function CommunityHub() {
   const {
     localStream,
     isSharing,
+    localWebcamStream,
+    webcamEnabled,
     remoteStreams,
+    remoteWebcams,
     remoteAudios,
     roomPeers,
     micEnabled,
@@ -374,6 +414,8 @@ export function CommunityHub() {
     error,
     startScreenShare,
     stopScreenShare,
+    toggleWebcam,
+    stopWebcam,
     toggleMic,
     toggleDeafen,
   } = useScreenShare(activeVoiceRoom?.id || '', user)
@@ -591,6 +633,9 @@ export function CommunityHub() {
     if (isSharing) {
       stopScreenShare()
     }
+    if (webcamEnabled) {
+      stopWebcam()
+    }
     playRoomEventSound('user-leave', soundSettings)
     setActiveVoiceRoom(null)
     setVoiceChatOpen(false)
@@ -725,13 +770,33 @@ export function CommunityHub() {
     setUser(null)
   }
 
+  const getPeerWebcamStream = (peerId: string): MediaStream | null => {
+    if (peerId === user?.id) {
+      return localWebcamStream
+    }
+    return remoteWebcams.find((w) => w.peerId === peerId)?.stream || null
+  }
+
   const allStreams = [
-    ...(localStream && user ? [{ id: 'local', user, stream: localStream, isLocal: true }] : []),
+    ...(localStream && user
+      ? [{ id: 'local-screen', user, stream: localStream, isLocal: true, isWebcam: false }]
+      : []),
+    ...(localWebcamStream && user
+      ? [{ id: 'local-webcam', user, stream: localWebcamStream, isLocal: true, isWebcam: true }]
+      : []),
     ...remoteStreams.map((r) => ({
-      id: r.peerId,
+      id: `screen-${r.peerId}`,
       user: r.user,
       stream: r.stream,
       isLocal: false,
+      isWebcam: false,
+    })),
+    ...remoteWebcams.map((w) => ({
+      id: `webcam-${w.peerId}`,
+      user: w.user,
+      stream: w.stream,
+      isLocal: false,
+      isWebcam: true,
     })),
   ]
 
@@ -1002,6 +1067,10 @@ export function CommunityHub() {
                             (isConnectedHere &&
                               ((peer.id === user?.id && isSharing) ||
                                 remoteStreams.some((s) => s.peerId === peer.id)))
+                          const showingKabeka =
+                            isConnectedHere &&
+                            ((peer.id === user?.id && webcamEnabled) ||
+                              remoteWebcams.some((w) => w.peerId === peer.id))
                           const peerRole = getPrimaryRoleForUser(peer.id)
                           const muteInfo = getPeerMuteStatus(peer)
 
@@ -1043,6 +1112,14 @@ export function CommunityHub() {
                                 {muteInfo.isDeafened && (
                                   <span title="Áudio Desativado">
                                     <HeadphoneOff className="h-3.5 w-3.5 text-[#da373c]" />
+                                  </span>
+                                )}
+                                {showingKabeka && (
+                                  <span
+                                    title="Mostrando a Kabeka (Webcam)"
+                                    className="rounded bg-amber-600 px-1 py-0.5 text-[9px] font-bold text-white uppercase"
+                                  >
+                                    KABEKA
                                   </span>
                                 )}
                                 {streaming && (
@@ -1178,6 +1255,23 @@ export function CommunityHub() {
                   }`}
                 >
                   <AudioWaveform className="h-3.5 w-3.5" />
+                </button>
+
+                {/* Webcam ("Kabeka") Quick Toggle */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedChannel(activeVoiceRoom)
+                    toggleWebcam()
+                  }}
+                  title={webcamEnabled ? 'Esconder a Kabeka (Desligar Webcam)' : 'Mostrar a Kabeka (Ligar Webcam)'}
+                  className={`cursor-pointer rounded px-2 py-1 text-[10px] font-semibold transition ${
+                    webcamEnabled
+                      ? 'bg-amber-600 text-white hover:bg-amber-700'
+                      : 'bg-[#2b2d31] text-white hover:bg-[#35373c]'
+                  }`}
+                >
+                  Kabeka
                 </button>
 
                 {!isSharing ? (
@@ -1671,6 +1765,7 @@ export function CommunityHub() {
                       stream={activeFocusedStream.stream}
                       user={activeFocusedStream.user}
                       isLocal={activeFocusedStream.isLocal}
+                      isWebcam={activeFocusedStream.isWebcam}
                       deafened={deafened}
                       isFocused={allStreams.length > 1}
                       onToggleFocus={
@@ -1681,22 +1776,41 @@ export function CommunityHub() {
                     />
                   </div>
 
-                  {/* Centered Participant Cards Strip */}
+                  {/* Centered Participant Cards Strip (Shows live Kabeka webcam if enabled!) */}
                   <div className="flex flex-1 items-center justify-center gap-3 overflow-x-auto pb-1">
                     {roomPeers.map((peer) => {
                       const talking =
                         peer.id === user?.id ? isSpeaking : Boolean(speakingPeers[peer.id])
                       const peerRole = getPrimaryRoleForUser(peer.id)
                       const muteInfo = getPeerMuteStatus(peer)
+                      const peerWebcam = getPeerWebcamStream(peer.id)
                       return (
                         <div
                           key={peer.id}
-                          onClick={() => setInspectedMember(peer)}
-                          className={`relative flex h-24 w-44 shrink-0 cursor-pointer flex-col items-center justify-center rounded-lg bg-[#2b2d31] p-2 ${
+                          onClick={() =>
+                            peerWebcam
+                              ? setFocusedStreamId(
+                                  peer.id === user?.id ? 'local-webcam' : `webcam-${peer.id}`
+                                )
+                              : setInspectedMember(peer)
+                          }
+                          className={`relative flex h-24 w-44 shrink-0 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-lg bg-[#2b2d31] p-2 ${
                             talking ? 'ring-2 ring-[#23a55a]' : ''
                           }`}
                         >
-                          <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
+                          {peerWebcam && (
+                            <PeerWebcamVideo
+                              stream={peerWebcam}
+                              mirrored={peer.id === user?.id}
+                              className="absolute inset-0 h-full w-full object-cover"
+                            />
+                          )}
+                          <div className="absolute top-1.5 right-1.5 z-10 flex items-center gap-1">
+                            {peerWebcam && (
+                              <span className="rounded bg-amber-600/90 px-1 py-0.2 text-[8px] font-black text-white uppercase">
+                                KABEKA
+                              </span>
+                            )}
                             {muteInfo.isMuted && (
                               <MicOff className="h-3 w-3 text-[#da373c]" />
                             )}
@@ -1704,14 +1818,20 @@ export function CommunityHub() {
                               <HeadphoneOff className="h-3 w-3 text-[#da373c]" />
                             )}
                           </div>
-                          <img
-                            src={peer.avatar_url}
-                            alt={peer.username}
-                            className="h-10 w-10 rounded-full object-cover"
-                          />
+                          {!peerWebcam && (
+                            <img
+                              src={peer.avatar_url}
+                              alt={peer.username}
+                              className="h-10 w-10 rounded-full object-cover"
+                            />
+                          )}
                           <span
                             style={{ color: peerRole?.color || '#e4e6eb' }}
-                            className="mt-1.5 max-w-full truncate text-[11px] font-bold"
+                            className={`z-10 max-w-full truncate text-[11px] font-bold ${
+                              peerWebcam
+                                ? 'mt-auto rounded bg-black/70 px-1.5 py-0.5 text-white'
+                                : 'mt-1.5'
+                            }`}
                           >
                             {peer.username}
                           </span>
@@ -1728,6 +1848,7 @@ export function CommunityHub() {
                       stream={item.stream}
                       user={item.user}
                       isLocal={item.isLocal}
+                      isWebcam={item.isWebcam}
                       deafened={deafened}
                       isFocused={false}
                       onToggleFocus={() => setFocusedStreamId(item.id)}
@@ -1802,6 +1923,24 @@ export function CommunityHub() {
                     ? 'Ruído: Padrão'
                     : 'Ruído: OFF'}
                 </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={toggleWebcam}
+                className={`flex cursor-pointer items-center gap-2 rounded-full px-4 py-2 text-xs font-bold transition ${
+                  webcamEnabled
+                    ? 'bg-amber-600 text-white hover:bg-amber-700'
+                    : 'bg-[#2b2d31] text-white hover:bg-[#35373c]'
+                }`}
+                title="Mostrar sua webcam (pode usar junto com o compartilhamento de tela!)"
+              >
+                {webcamEnabled ? (
+                  <CameraOff className="h-4 w-4" />
+                ) : (
+                  <Camera className="h-4 w-4" />
+                )}
+                {webcamEnabled ? 'Esconder a Kabeka' : 'Mostrar a Kabeka'}
               </button>
 
               {!isSharing ? (

@@ -71,6 +71,7 @@ export interface SignalPayload {
     | 'ice-candidate'
     | 'request-stream'
     | 'stop-stream'
+    | 'stop-webcam'
     | 'speaking-state'
     | 'mute-state'
     | 'prank'
@@ -85,4 +86,6 @@ export interface SignalPayload {
   isDeafened?: boolean
   prank?: PrankEvent
   watchState?: WatchTogetherState | null
+  screenStreamId?: string | null
+  webcamStreamId?: string | null
 }

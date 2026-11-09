@@ -122,7 +122,10 @@ export function loadMicSettings(): MicAudioSettings {
 export function useScreenShare(roomId: string, currentUser: UserProfile | null) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const [isSharing, setIsSharing] = useState(false)
+  const [localWebcamStream, setLocalWebcamStream] = useState<MediaStream | null>(null)
+  const [webcamEnabled, setWebcamEnabled] = useState(false)
   const [remoteStreams, setRemoteStreams] = useState<RemoteStreamItem[]>([])
+  const [remoteWebcams, setRemoteWebcams] = useState<RemoteStreamItem[]>([])
   const [remoteAudios, setRemoteAudios] = useState<RemoteAudioItem[]>([])
   const [roomPeers, setRoomPeers] = useState<UserProfile[]>([])
   const [micEnabled, setMicEnabled] = useState(false)
@@ -140,6 +143,10 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const currentUserRef = useRef<UserProfile | null>(currentUser)
   const roomPeersRef = useRef<UserProfile[]>([])
   const localStreamRef = useRef<MediaStream | null>(null)
+  const localWebcamStreamRef = useRef<MediaStream | null>(null)
+  const peerMediaIdsRef = useRef<
+    Map<string, { screenStreamId?: string | null; webcamStreamId?: string | null }>
+  >(new Map())
   const shareOptionsRef = useRef<ScreenShareOptions>({
     resolution: '1080p',
     fps: 60,
@@ -190,6 +197,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       pcsRef.current.delete(peerId)
     }
     pendingCandidatesRef.current.delete(peerId)
+    peerMediaIdsRef.current.delete(peerId)
     setRemoteStreams((prev) => {
       const hadStream = prev.some((item) => item.peerId === peerId)
       if (hadStream && !deafenedRef.current) {
@@ -197,6 +205,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       }
       return prev.filter((item) => item.peerId !== peerId)
     })
+    setRemoteWebcams((prev) => prev.filter((item) => item.peerId !== peerId))
     setRemoteAudios((prev) => prev.filter((item) => item.peerId !== peerId))
   }, [])
 
@@ -246,27 +255,44 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
       pc.ontrack = (event) => {
         const track = event.track
-        // Always wrap into a fresh MediaStream reference so React <video> updates immediately when a new track arrives!
         const incomingStream = event.streams[0]
         const freshStream = incomingStream
           ? new MediaStream(incomingStream.getTracks())
           : new MediaStream([track])
 
         if (track.kind === 'video') {
-          setRemoteStreams((prev) => {
-            const exists = prev.some((s) => s.peerId === targetPeerId)
-            if (!exists && !deafenedRef.current) {
-              playRoomEventSound('stream-start')
-            }
-            if (exists) {
-              return prev.map((s) =>
-                s.peerId === targetPeerId
-                  ? { peerId: targetPeerId, user: targetUser, stream: freshStream }
-                  : s
-              )
-            }
-            return [...prev, { peerId: targetPeerId, user: targetUser, stream: freshStream }]
-          })
+          const mediaIds = peerMediaIdsRef.current.get(targetPeerId)
+          const isWebcam =
+            incomingStream && mediaIds?.webcamStreamId && incomingStream.id === mediaIds.webcamStreamId
+
+          if (isWebcam) {
+            setRemoteWebcams((prev) => {
+              const exists = prev.some((s) => s.peerId === targetPeerId)
+              if (exists) {
+                return prev.map((s) =>
+                  s.peerId === targetPeerId
+                    ? { peerId: targetPeerId, user: targetUser, stream: freshStream }
+                    : s
+                )
+              }
+              return [...prev, { peerId: targetPeerId, user: targetUser, stream: freshStream }]
+            })
+          } else {
+            setRemoteStreams((prev) => {
+              const exists = prev.some((s) => s.peerId === targetPeerId)
+              if (!exists && !deafenedRef.current) {
+                playRoomEventSound('stream-start')
+              }
+              if (exists) {
+                return prev.map((s) =>
+                  s.peerId === targetPeerId
+                    ? { peerId: targetPeerId, user: targetUser, stream: freshStream }
+                    : s
+                )
+              }
+              return [...prev, { peerId: targetPeerId, user: targetUser, stream: freshStream }]
+            })
+          }
         } else if (track.kind === 'audio') {
           if (!incomingStream || incomingStream.getVideoTracks().length === 0) {
             setRemoteAudios((prev) => {
@@ -362,6 +388,15 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         })
       }
 
+      if (localWebcamStreamRef.current) {
+        localWebcamStreamRef.current.getVideoTracks().forEach((track) => {
+          const alreadyAdded = existingSenders.some((s) => s.track?.id === track.id)
+          if (!alreadyAdded) {
+            pc.addTrack(track, localWebcamStreamRef.current!)
+          }
+        })
+      }
+
       if (micStreamRef.current) {
         micStreamRef.current.getAudioTracks().forEach((track) => {
           const alreadyAdded = existingSenders.some((s) => s.track?.id === track.id)
@@ -386,6 +421,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         fromUser: me,
         to: targetPeerId,
         sdp: pc.localDescription!,
+        screenStreamId: localStreamRef.current?.id || null,
+        webcamStreamId: localWebcamStreamRef.current?.id || null,
       })
     },
     [applySenderHighQualityParameters, getOrCreatePeerConnection, sendSignal]
@@ -459,7 +496,11 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
         try {
           if (sig.type === 'request-stream') {
-            if (localStreamRef.current || micStreamRef.current) {
+            if (
+              localStreamRef.current ||
+              localWebcamStreamRef.current ||
+              micStreamRef.current
+            ) {
               await syncTracksAndOffer(sig.from, sig.fromUser)
             }
             if (watchStateRef.current) {
@@ -480,6 +521,12 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
               isDeafened: deafenedRef.current,
             })
           } else if (sig.type === 'offer' && sig.sdp) {
+            if (sig.screenStreamId !== undefined || sig.webcamStreamId !== undefined) {
+              peerMediaIdsRef.current.set(sig.from, {
+                screenStreamId: sig.screenStreamId,
+                webcamStreamId: sig.webcamStreamId,
+              })
+            }
             const pc = getOrCreatePeerConnection(sig.from, sig.fromUser)
             if (!pc) return
             if (pc.signalingState !== 'stable') {
@@ -506,8 +553,16 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
               fromUser: curMe,
               to: sig.from,
               sdp: pc.localDescription!,
+              screenStreamId: localStreamRef.current?.id || null,
+              webcamStreamId: localWebcamStreamRef.current?.id || null,
             })
           } else if (sig.type === 'answer' && sig.sdp) {
+            if (sig.screenStreamId !== undefined || sig.webcamStreamId !== undefined) {
+              peerMediaIdsRef.current.set(sig.from, {
+                screenStreamId: sig.screenStreamId,
+                webcamStreamId: sig.webcamStreamId,
+              })
+            }
             const pc = pcsRef.current.get(sig.from)
             if (pc && pc.signalingState === 'have-local-offer') {
               await pc.setRemoteDescription(new RTCSessionDescription(sig.sdp))
@@ -529,6 +584,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             if (!deafenedRef.current) {
               playRoomEventSound('stream-stop')
             }
+          } else if (sig.type === 'stop-webcam') {
+            setRemoteWebcams((prev) => prev.filter((item) => item.peerId !== sig.from))
           } else if (sig.type === 'speaking-state') {
             setSpeakingPeers((prev) => ({
               ...prev,
@@ -584,7 +641,9 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       pcsMap.forEach((pc) => pc.close())
       pcsMap.clear()
       pendingCandidatesRef.current.clear()
+      peerMediaIdsRef.current.clear()
       setRemoteStreams([])
+      setRemoteWebcams([])
       setRemoteAudios([])
       supabase.removeChannel(channel)
       channelRef.current = null
@@ -1044,10 +1103,81 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     [applySenderHighQualityParameters]
   )
 
+  const stopWebcam = useCallback(() => {
+    const me = currentUserRef.current
+    if (localWebcamStreamRef.current) {
+      localWebcamStreamRef.current.getTracks().forEach((track) => {
+        pcsRef.current.forEach((pc) => {
+          const sender = pc.getSenders().find((s) => s.track?.id === track.id)
+          if (sender) pc.removeTrack(sender)
+        })
+        track.stop()
+      })
+      localWebcamStreamRef.current = null
+    }
+    setLocalWebcamStream(null)
+    setWebcamEnabled(false)
+
+    if (me) {
+      sendSignal({
+        type: 'stop-webcam',
+        from: me.id,
+        fromUser: me,
+      })
+    }
+  }, [sendSignal])
+
+  const toggleWebcam = useCallback(async () => {
+    const me = currentUserRef.current
+    if (!me) return
+    setError(null)
+
+    if (webcamEnabled && localWebcamStreamRef.current) {
+      stopWebcam()
+      await renegotiateAllPeers()
+      return
+    }
+
+    try {
+      const camStream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 },
+        },
+        audio: false,
+      })
+
+      const [camTrack] = camStream.getVideoTracks()
+      if (camTrack) {
+        camTrack.contentHint = 'motion'
+        camTrack.onended = () => {
+          stopWebcam()
+        }
+      }
+
+      localWebcamStreamRef.current = camStream
+      setLocalWebcamStream(camStream)
+      setWebcamEnabled(true)
+      if (!deafenedRef.current) {
+        playRoomEventSound('stream-start')
+      }
+
+      await renegotiateAllPeers()
+    } catch (err: unknown) {
+      if (err instanceof Error && err.name !== 'NotAllowedError') {
+        setError('Não foi possível acessar a webcam (Kabeka).')
+      }
+    }
+  }, [renegotiateAllPeers, stopWebcam, webcamEnabled])
+
   return {
     localStream,
     isSharing,
+    localWebcamStream,
+    webcamEnabled,
     remoteStreams,
+    remoteWebcams,
     remoteAudios,
     roomPeers,
     micEnabled,
@@ -1066,6 +1196,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     error,
     startScreenShare,
     stopScreenShare,
+    toggleWebcam,
+    stopWebcam,
     toggleMic,
     toggleDeafen,
   }

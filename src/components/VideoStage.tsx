@@ -7,6 +7,7 @@ interface VideoStageProps {
   stream: MediaStream
   user: UserProfile
   isLocal?: boolean
+  isWebcam?: boolean
   deafened?: boolean
   isFocused?: boolean
   onToggleFocus?: () => void
@@ -16,6 +17,7 @@ export function VideoStage({
   stream,
   user,
   isLocal = false,
+  isWebcam = false,
   deafened = false,
   isFocused = false,
   onToggleFocus,
@@ -170,8 +172,12 @@ export function VideoStage({
           <span className="text-xs font-semibold text-white">
             {user.username} {isLocal ? '(Você)' : ''}
           </span>
-          <span className="rounded bg-[#da373c] px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white uppercase">
-            AO VIVO
+          <span
+            className={`rounded px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white uppercase ${
+              isWebcam ? 'bg-amber-600' : 'bg-[#da373c]'
+            }`}
+          >
+            {isWebcam ? '🙂 KABEKA' : 'AO VIVO'}
           </span>
           {liveStats.height > 0 && (
             <span className="rounded bg-[#2b2d31] px-1.5 py-0.5 text-[10px] font-extrabold text-emerald-400">
