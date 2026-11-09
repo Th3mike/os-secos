@@ -44,15 +44,24 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const [speakingPeers, setSpeakingPeers] = useState<Record<string, boolean>>({})
   const [error, setError] = useState<string | null>(null)
 
+  const currentUserRef = useRef<UserProfile | null>(currentUser)
+  const roomPeersRef = useRef<UserProfile[]>([])
   const localStreamRef = useRef<MediaStream | null>(null)
   const micStreamRef = useRef<MediaStream | null>(null)
   const deafenedRef = useRef(false)
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
   const channelRef = useRef<RealtimeChannel | null>(null)
-  const bcRef = useRef<BroadcastChannel | null>(null)
   const audioAnalyserIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const knownPeersRef = useRef<Set<string>>(new Set())
   const initialPresenceSyncedRef = useRef(false)
+
+  useEffect(() => {
+    currentUserRef.current = currentUser
+  }, [currentUser])
+
+  useEffect(() => {
+    roomPeersRef.current = roomPeers
+  }, [roomPeers])
 
   useEffect(() => {
     deafenedRef.current = deafened
@@ -81,16 +90,23 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         event: 'webrtc-signal',
         payload,
       })
-    } else if (bcRef.current) {
-      bcRef.current.postMessage(payload)
     }
   }, [])
 
-  const createPeerConnection = useCallback(
-    (targetPeerId: string, targetUser: UserProfile, isInitiator: boolean) => {
-      if (!currentUser) return null
+  const getOrCreatePeerConnection = useCallback(
+    (targetPeerId: string, targetUser: UserProfile) => {
+      const me = currentUserRef.current
+      if (!me) return null
 
       const existing = pcsRef.current.get(targetPeerId)
+      if (
+        existing &&
+        existing.connectionState !== 'closed' &&
+        existing.connectionState !== 'failed'
+      ) {
+        return existing
+      }
+
       if (existing) {
         existing.close()
       }
@@ -99,11 +115,12 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       pcsRef.current.set(targetPeerId, pc)
 
       pc.onicecandidate = (event) => {
-        if (event.candidate) {
+        const curMe = currentUserRef.current
+        if (event.candidate && curMe) {
           sendSignal({
             type: 'ice-candidate',
-            from: currentUser.id,
-            fromUser: currentUser,
+            from: curMe.id,
+            fromUser: curMe,
             to: targetPeerId,
             candidate: event.candidate.toJSON(),
           })
@@ -111,11 +128,10 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       }
 
       pc.ontrack = (event) => {
-        const [stream] = event.streams
-        if (!stream) return
+        const track = event.track
+        const stream = event.streams[0] || new MediaStream([track])
 
-        const hasVideo = stream.getVideoTracks().length > 0
-        if (hasVideo) {
+        if (track.kind === 'video') {
           setRemoteStreams((prev) => {
             const exists = prev.some((s) => s.peerId === targetPeerId)
             if (!exists && !deafenedRef.current) {
@@ -128,218 +144,228 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             }
             return [...prev, { peerId: targetPeerId, user: targetUser, stream }]
           })
-        } else {
-          setRemoteAudios((prev) => {
-            const exists = prev.some((s) => s.peerId === targetPeerId)
-            if (exists) {
-              return prev.map((s) =>
-                s.peerId === targetPeerId ? { peerId: targetPeerId, user: targetUser, stream } : s
-              )
-            }
-            return [...prev, { peerId: targetPeerId, user: targetUser, stream }]
-          })
+        } else if (track.kind === 'audio') {
+          // If this stream also has video, it's system audio handled by VideoStage; otherwise voice audio
+          if (stream.getVideoTracks().length === 0) {
+            setRemoteAudios((prev) => {
+              const exists = prev.some((s) => s.peerId === targetPeerId)
+              if (exists) {
+                return prev.map((s) =>
+                  s.peerId === targetPeerId ? { peerId: targetPeerId, user: targetUser, stream } : s
+                )
+              }
+              return [...prev, { peerId: targetPeerId, user: targetUser, stream }]
+            })
+          }
         }
       }
 
       pc.onconnectionstatechange = () => {
-        if (
-          pc.connectionState === 'disconnected' ||
-          pc.connectionState === 'failed' ||
-          pc.connectionState === 'closed'
-        ) {
+        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
           cleanupPeer(targetPeerId)
-        }
-      }
-
-      if (isInitiator) {
-        if (localStreamRef.current) {
-          localStreamRef.current.getTracks().forEach((track) => {
-            pc.addTrack(track, localStreamRef.current!)
-          })
-        }
-        if (micStreamRef.current) {
-          micStreamRef.current.getAudioTracks().forEach((track) => {
-            pc.addTrack(track, micStreamRef.current!)
-          })
         }
       }
 
       return pc
     },
-    [currentUser, cleanupPeer, sendSignal]
+    [cleanupPeer, sendSignal]
+  )
+
+  const syncTracksAndOffer = useCallback(
+    async (targetPeerId: string, targetUser: UserProfile) => {
+      const me = currentUserRef.current
+      if (!me || targetPeerId === me.id) return
+
+      const pc = getOrCreatePeerConnection(targetPeerId, targetUser)
+      if (!pc) return
+
+      const existingSenders = pc.getSenders()
+
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((track) => {
+          const alreadyAdded = existingSenders.some((s) => s.track?.id === track.id)
+          if (!alreadyAdded) {
+            pc.addTrack(track, localStreamRef.current!)
+          }
+        })
+      }
+
+      if (micStreamRef.current) {
+        micStreamRef.current.getAudioTracks().forEach((track) => {
+          const alreadyAdded = existingSenders.some((s) => s.track?.id === track.id)
+          if (!alreadyAdded) {
+            pc.addTrack(track, micStreamRef.current!)
+          }
+        })
+      }
+
+      const offer = await pc.createOffer()
+      await pc.setLocalDescription(offer)
+      sendSignal({
+        type: 'offer',
+        from: me.id,
+        fromUser: me,
+        to: targetPeerId,
+        sdp: pc.localDescription!,
+      })
+    },
+    [getOrCreatePeerConnection, sendSignal]
   )
 
   const renegotiateAllPeers = useCallback(async () => {
-    if (!currentUser) return
-    for (const peer of roomPeers) {
-      if (peer.id === currentUser.id) continue
-      const pc = createPeerConnection(peer.id, peer, true)
-      if (pc) {
-        const offer = await pc.createOffer()
-        await pc.setLocalDescription(offer)
-        sendSignal({
-          type: 'offer',
-          from: currentUser.id,
-          fromUser: currentUser,
-          to: peer.id,
-          sdp: pc.localDescription!,
-        })
-      }
+    const me = currentUserRef.current
+    if (!me) return
+    for (const peer of roomPeersRef.current) {
+      if (peer.id === me.id) continue
+      await syncTracksAndOffer(peer.id, peer)
     }
-  }, [currentUser, roomPeers, createPeerConnection, sendSignal])
+  }, [syncTracksAndOffer])
 
-  const handleSignal = useCallback(
-    async (payload: SignalPayload) => {
-      if (!currentUser || payload.from === currentUser.id) return
-      if (payload.to && payload.to !== currentUser.id) return
-
-      try {
-        if (payload.type === 'request-stream') {
-          setRoomPeers((prev) => {
-            if (prev.some((p) => p.id === payload.fromUser.id)) return prev
-            return [...prev, payload.fromUser]
-          })
-
-          if (!localStreamRef.current && !micStreamRef.current) return
-          const pc = createPeerConnection(payload.from, payload.fromUser, true)
-          if (!pc) return
-          const offer = await pc.createOffer()
-          await pc.setLocalDescription(offer)
-          sendSignal({
-            type: 'offer',
-            from: currentUser.id,
-            fromUser: currentUser,
-            to: payload.from,
-            sdp: pc.localDescription!,
-          })
-        } else if (payload.type === 'offer' && payload.sdp) {
-          const pc = createPeerConnection(payload.from, payload.fromUser, false)
-          if (!pc) return
-          await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
-          const answer = await pc.createAnswer()
-          await pc.setLocalDescription(answer)
-          sendSignal({
-            type: 'answer',
-            from: currentUser.id,
-            fromUser: currentUser,
-            to: payload.from,
-            sdp: pc.localDescription!,
-          })
-        } else if (payload.type === 'answer' && payload.sdp) {
-          const pc = pcsRef.current.get(payload.from)
-          if (pc) {
-            await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp))
-          }
-        } else if (payload.type === 'ice-candidate' && payload.candidate) {
-          const pc = pcsRef.current.get(payload.from)
-          if (pc) {
-            await pc.addIceCandidate(new RTCIceCandidate(payload.candidate))
-          }
-        } else if (payload.type === 'stop-stream') {
-          cleanupPeer(payload.from)
-        } else if (payload.type === 'speaking-state') {
-          setSpeakingPeers((prev) => ({
-            ...prev,
-            [payload.from]: Boolean(payload.isSpeaking),
-          }))
-        }
-      } catch (err) {
-        console.error('WebRTC Signal Error:', err)
-      }
-    },
-    [currentUser, createPeerConnection, cleanupPeer, sendSignal]
-  )
+  // Subscribe ONLY when roomId or userId changes — prevents tearing down active streams!
+  const currentUserId = currentUser?.id
 
   useEffect(() => {
-    if (!currentUser || !roomId) return
+    const me = currentUserRef.current
+    if (!me || !currentUserId || !roomId || !isSupabaseConfigured()) return
 
     const pcsMap = pcsRef.current
-    knownPeersRef.current = new Set([currentUser.id])
+    knownPeersRef.current = new Set([currentUserId])
     initialPresenceSyncedRef.current = false
 
-    if (isSupabaseConfigured()) {
-      const supabase = createClient()
-      const channel = supabase.channel(`room:${roomId}`, {
-        config: {
-          presence: { key: currentUser.id },
-          broadcast: { self: false },
-        },
+    const supabase = createClient()
+    const channel = supabase.channel(`room:${roomId}`, {
+      config: {
+        presence: { key: currentUserId },
+        broadcast: { self: false },
+      },
+    })
+
+    channel
+      .on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState<UserProfile>()
+        const users: UserProfile[] = []
+        const nextIds = new Set<string>()
+
+        Object.values(state).forEach((presences) => {
+          if (presences[0]) {
+            users.push(presences[0])
+            nextIds.add(presences[0].id)
+          }
+        })
+
+        if (initialPresenceSyncedRef.current && !deafenedRef.current) {
+          for (const id of nextIds) {
+            if (id !== currentUserId && !knownPeersRef.current.has(id)) {
+              playRoomEventSound('user-join')
+              break
+            }
+          }
+          for (const id of knownPeersRef.current) {
+            if (id !== currentUserId && !nextIds.has(id)) {
+              playRoomEventSound('user-leave')
+              cleanupPeer(id)
+              break
+            }
+          }
+        }
+
+        knownPeersRef.current = nextIds
+        initialPresenceSyncedRef.current = true
+        setRoomPeers(users)
+      })
+      .on('broadcast', { event: 'webrtc-signal' }, async ({ payload }) => {
+        const sig = payload as SignalPayload
+        const curMe = currentUserRef.current
+        if (!curMe || sig.from === curMe.id) return
+        if (sig.to && sig.to !== curMe.id) return
+
+        try {
+          if (sig.type === 'request-stream') {
+            if (localStreamRef.current || micStreamRef.current) {
+              await syncTracksAndOffer(sig.from, sig.fromUser)
+            }
+          } else if (sig.type === 'offer' && sig.sdp) {
+            const pc = getOrCreatePeerConnection(sig.from, sig.fromUser)
+            if (!pc) return
+            await pc.setRemoteDescription(new RTCSessionDescription(sig.sdp))
+            const answer = await pc.createAnswer()
+            await pc.setLocalDescription(answer)
+            sendSignal({
+              type: 'answer',
+              from: curMe.id,
+              fromUser: curMe,
+              to: sig.from,
+              sdp: pc.localDescription!,
+            })
+          } else if (sig.type === 'answer' && sig.sdp) {
+            const pc = pcsRef.current.get(sig.from)
+            if (pc && pc.signalingState === 'have-local-offer') {
+              await pc.setRemoteDescription(new RTCSessionDescription(sig.sdp))
+            }
+          } else if (sig.type === 'ice-candidate' && sig.candidate) {
+            const pc = pcsRef.current.get(sig.from)
+            if (pc && pc.remoteDescription) {
+              await pc.addIceCandidate(new RTCIceCandidate(sig.candidate))
+            }
+          } else if (sig.type === 'stop-stream') {
+            setRemoteStreams((prev) => prev.filter((item) => item.peerId !== sig.from))
+            if (!deafenedRef.current) {
+              playRoomEventSound('stream-stop')
+            }
+          } else if (sig.type === 'speaking-state') {
+            setSpeakingPeers((prev) => ({
+              ...prev,
+              [sig.from]: Boolean(sig.isSpeaking),
+            }))
+          }
+        } catch (err) {
+          console.error('Signal error:', err)
+        }
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          const curMe = currentUserRef.current!
+          await channel.track({
+            ...curMe,
+            status: localStreamRef.current ? 'streaming' : 'online',
+          })
+          if (!deafenedRef.current) {
+            playRoomEventSound('user-join')
+          }
+          channel.send({
+            type: 'broadcast',
+            event: 'webrtc-signal',
+            payload: {
+              type: 'request-stream',
+              from: curMe.id,
+              fromUser: curMe,
+            } satisfies SignalPayload,
+          })
+        }
       })
 
-      channel
-        .on('presence', { event: 'sync' }, () => {
-          const state = channel.presenceState<UserProfile>()
-          const users: UserProfile[] = []
-          const nextIds = new Set<string>()
+    channelRef.current = channel
 
-          Object.values(state).forEach((presences) => {
-            if (presences[0]) {
-              users.push(presences[0])
-              nextIds.add(presences[0].id)
-            }
-          })
-
-          if (initialPresenceSyncedRef.current && !deafenedRef.current) {
-            // Detect someone joining
-            for (const id of nextIds) {
-              if (id !== currentUser.id && !knownPeersRef.current.has(id)) {
-                playRoomEventSound('user-join')
-                break
-              }
-            }
-            // Detect someone leaving
-            for (const id of knownPeersRef.current) {
-              if (id !== currentUser.id && !nextIds.has(id)) {
-                playRoomEventSound('user-leave')
-                break
-              }
-            }
-          }
-
-          knownPeersRef.current = nextIds
-          initialPresenceSyncedRef.current = true
-          setRoomPeers(users)
-        })
-        .on('broadcast', { event: 'webrtc-signal' }, ({ payload }) => {
-          handleSignal(payload as SignalPayload)
-        })
-        .subscribe(async (status) => {
-          if (status === 'SUBSCRIBED') {
-            await channel.track({
-              ...currentUser,
-              status: localStreamRef.current ? 'streaming' : 'online',
-            })
-            if (!deafenedRef.current) {
-              playRoomEventSound('user-join')
-            }
-            channel.send({
-              type: 'broadcast',
-              event: 'webrtc-signal',
-              payload: {
-                type: 'request-stream',
-                from: currentUser.id,
-                fromUser: currentUser,
-              } satisfies SignalPayload,
-            })
-          }
-        })
-
-      channelRef.current = channel
-
-      return () => {
-        pcsMap.forEach((pc) => pc.close())
-        pcsMap.clear()
-        setRemoteStreams([])
-        setRemoteAudios([])
-        supabase.removeChannel(channel)
-        channelRef.current = null
-      }
+    return () => {
+      pcsMap.forEach((pc) => pc.close())
+      pcsMap.clear()
+      setRemoteStreams([])
+      setRemoteAudios([])
+      supabase.removeChannel(channel)
+      channelRef.current = null
     }
-  }, [roomId, currentUser, handleSignal])
+  }, [roomId, currentUserId, cleanupPeer, getOrCreatePeerConnection, sendSignal, syncTracksAndOffer])
 
   const stopScreenShare = useCallback(() => {
+    const me = currentUserRef.current
     if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((track) => track.stop())
+      localStreamRef.current.getTracks().forEach((track) => {
+        pcsRef.current.forEach((pc) => {
+          const sender = pc.getSenders().find((s) => s.track?.id === track.id)
+          if (sender) pc.removeTrack(sender)
+        })
+        track.stop()
+      })
       localStreamRef.current = null
     }
     setLocalStream(null)
@@ -348,36 +374,33 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       playRoomEventSound('stream-stop')
     }
 
-    pcsRef.current.forEach((pc) => pc.close())
-    pcsRef.current.clear()
-
-    if (currentUser) {
+    if (me) {
       sendSignal({
         type: 'stop-stream',
-        from: currentUser.id,
-        fromUser: currentUser,
+        from: me.id,
+        fromUser: me,
       })
       if (channelRef.current) {
-        channelRef.current.track({ ...currentUser, status: 'online' })
+        channelRef.current.track({ ...me, status: 'online' })
       }
     }
-
-    if (micStreamRef.current) {
-      setTimeout(() => {
-        renegotiateAllPeers()
-      }, 150)
-    }
-  }, [currentUser, sendSignal, renegotiateAllPeers])
+  }, [sendSignal])
 
   const startScreenShare = useCallback(
     async (options: ScreenShareOptions = { resolution: '1080p', fps: 60, includeAudio: true }) => {
-      if (!currentUser) return
+      const me = currentUserRef.current
+      if (!me) return
       setError(null)
 
       const heightMap = { '720p': 720, '1080p': 1080, '1440p': 1440 }
       const widthMap = { '720p': 1280, '1080p': 1920, '1440p': 2560 }
 
       try {
+        // Stop previous share if any
+        if (localStreamRef.current) {
+          localStreamRef.current.getTracks().forEach((t) => t.stop())
+        }
+
         const stream = await navigator.mediaDevices.getDisplayMedia({
           video: {
             width: { ideal: widthMap[options.resolution] },
@@ -395,6 +418,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
         const [videoTrack] = stream.getVideoTracks()
         if (videoTrack) {
+          videoTrack.contentHint = 'motion'
           videoTrack.onended = () => {
             stopScreenShare()
           }
@@ -408,7 +432,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         }
 
         if (channelRef.current) {
-          await channelRef.current.track({ ...currentUser, status: 'streaming' })
+          await channelRef.current.track({ ...me, status: 'streaming' })
         }
 
         await renegotiateAllPeers()
@@ -418,14 +442,21 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         }
       }
     },
-    [currentUser, renegotiateAllPeers, stopScreenShare]
+    [renegotiateAllPeers, stopScreenShare]
   )
 
   const toggleMic = useCallback(async () => {
-    if (!currentUser) return
+    const me = currentUserRef.current
+    if (!me) return
     try {
       if (micEnabled && micStreamRef.current) {
-        micStreamRef.current.getTracks().forEach((t) => t.stop())
+        micStreamRef.current.getTracks().forEach((track) => {
+          pcsRef.current.forEach((pc) => {
+            const sender = pc.getSenders().find((s) => s.track?.id === track.id)
+            if (sender) pc.removeTrack(sender)
+          })
+          track.stop()
+        })
         micStreamRef.current = null
         setMicEnabled(false)
         setIsSpeaking(false)
@@ -436,11 +467,10 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         }
         sendSignal({
           type: 'speaking-state',
-          from: currentUser.id,
-          fromUser: currentUser,
+          from: me.id,
+          fromUser: me,
           isSpeaking: false,
         })
-        await renegotiateAllPeers()
       } else {
         const audioStream = await navigator.mediaDevices.getUserMedia({
           audio: {
@@ -473,12 +503,15 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             if (talking !== lastState) {
               lastState = talking
               setIsSpeaking(talking)
-              sendSignal({
-                type: 'speaking-state',
-                from: currentUser.id,
-                fromUser: currentUser,
-                isSpeaking: talking,
-              })
+              const curMe = currentUserRef.current
+              if (curMe) {
+                sendSignal({
+                  type: 'speaking-state',
+                  from: curMe.id,
+                  fromUser: curMe,
+                  isSpeaking: talking,
+                })
+              }
             }
           }, 140)
         }
@@ -488,7 +521,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     } catch {
       setError('Permissão de microfone negada ou dispositivo não encontrado.')
     }
-  }, [currentUser, micEnabled, renegotiateAllPeers, sendSignal])
+  }, [micEnabled, renegotiateAllPeers, sendSignal])
 
   const toggleDeafen = useCallback(() => {
     setDeafened((prev) => !prev)

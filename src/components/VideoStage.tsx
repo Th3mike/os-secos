@@ -8,17 +8,49 @@ interface VideoStageProps {
   user: UserProfile
   isLocal?: boolean
   deafened?: boolean
+  isFocused?: boolean
+  onToggleFocus?: () => void
 }
 
-export function VideoStage({ stream, user, isLocal = false, deafened = false }: VideoStageProps) {
+export function VideoStage({
+  stream,
+  user,
+  isLocal = false,
+  deafened = false,
+  isFocused = false,
+  onToggleFocus,
+}: VideoStageProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const [muted, setMuted] = useState(isLocal)
   const [volume, setVolume] = useState(1)
 
   useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream
+    const videoEl = videoRef.current
+    if (!videoEl || !stream) return
+
+    if (videoEl.srcObject !== stream) {
+      videoEl.srcObject = stream
+    }
+
+    const ensurePlay = () => {
+      videoEl.play().catch(() => {
+        // Fallback if browser requires muted playback first
+      })
+    }
+
+    ensurePlay()
+
+    // Recover automatically if track unmutes or pauses
+    const tracks = stream.getVideoTracks()
+    tracks.forEach((t) => {
+      t.onunmute = ensurePlay
+    })
+
+    return () => {
+      tracks.forEach((t) => {
+        t.onunmute = null
+      })
     }
   }, [stream])
 
@@ -40,7 +72,7 @@ export function VideoStage({ stream, user, isLocal = false, deafened = false }: 
         await videoRef.current.requestPictureInPicture()
       }
     } catch {
-      // Ignore PiP error if not supported
+      // Ignore if PiP unsupported
     }
   }
 
@@ -65,33 +97,46 @@ export function VideoStage({ stream, user, isLocal = false, deafened = false }: 
   return (
     <div
       ref={containerRef}
-      className="flex flex-col overflow-hidden rounded-lg border border-[#26282c] bg-[#0b0c0e]"
+      className="group relative flex h-full w-full flex-col overflow-hidden rounded-lg border border-[#232428] bg-black"
     >
-      {/* Clean Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#1e2024] bg-[#16171a] px-3 py-2">
-        <div className="flex items-center gap-2">
+      {/* Top Overlay Header (Discord Stream Style) */}
+      <div className="absolute top-2.5 left-2.5 right-2.5 z-10 flex items-center justify-between pointer-events-none">
+        <div className="flex items-center gap-2 rounded-md bg-[#111214]/85 px-2.5 py-1 backdrop-blur-sm">
           <img
             src={user.avatar_url}
             alt={user.username}
-            className="h-5 w-5 rounded-full object-cover"
+            className="h-4 w-4 rounded-full object-cover"
           />
-          <span className="text-xs font-semibold text-zinc-100">
+          <span className="text-xs font-semibold text-white">
             {user.username} {isLocal ? '(Você)' : ''}
           </span>
-          <span className="rounded bg-red-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
+          <span className="rounded bg-[#da373c] px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white uppercase">
             AO VIVO
           </span>
         </div>
+      </div>
 
+      {/* Video Element fills adjustable stage */}
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted={isLocal || muted || deafened}
+        onClick={onToggleFocus}
+        className="h-full w-full flex-1 cursor-pointer bg-black object-contain"
+      />
+
+      {/* Bottom Controls Bar */}
+      <div className="absolute right-2.5 bottom-2.5 left-2.5 z-10 flex flex-wrap items-center justify-between gap-2 rounded-md bg-[#111214]/90 px-3 py-1.5 opacity-0 backdrop-blur-sm transition-opacity duration-150 group-hover:opacity-100">
         <div className="flex items-center gap-2">
-          {!isLocal && (
-            <div className="flex items-center gap-2">
+          {!isLocal ? (
+            <>
               <button
                 type="button"
                 onClick={toggleMute}
-                className="cursor-pointer rounded bg-[#23252a] px-2 py-1 text-[11px] font-medium text-zinc-200 hover:bg-[#2f3238]"
+                className="cursor-pointer rounded bg-[#2b2d31] px-2 py-1 text-[11px] font-medium text-zinc-200 hover:bg-[#35373c]"
               >
-                {muted || deafened ? 'Som: Mudo' : 'Som: Ativo'}
+                {muted || deafened ? 'Som: Mudo' : 'Som: ON'}
               </button>
               <input
                 type="range"
@@ -100,37 +145,40 @@ export function VideoStage({ stream, user, isLocal = false, deafened = false }: 
                 step="0.05"
                 value={muted || deafened ? 0 : volume}
                 onChange={handleVolume}
-                className="h-1.5 w-20 cursor-pointer accent-zinc-200"
-                title="Volume da transmissão"
+                className="h-1.5 w-20 cursor-pointer accent-[#5865f2]"
               />
-            </div>
+            </>
+          ) : (
+            <span className="text-[11px] text-zinc-400">Sua transmissão</span>
           )}
+        </div>
 
+        <div className="flex items-center gap-1.5">
+          {onToggleFocus && (
+            <button
+              type="button"
+              onClick={onToggleFocus}
+              className="cursor-pointer rounded bg-[#2b2d31] px-2.5 py-1 text-[11px] font-medium text-zinc-200 hover:bg-[#35373c]"
+            >
+              {isFocused ? 'Ver em Grade' : 'Expandir no Palco'}
+            </button>
+          )}
           <button
             type="button"
             onClick={handlePiP}
-            className="cursor-pointer rounded bg-[#23252a] px-2 py-1 text-[11px] font-medium text-zinc-300 hover:bg-[#2f3238] hover:text-white"
+            className="cursor-pointer rounded bg-[#2b2d31] px-2.5 py-1 text-[11px] font-medium text-zinc-200 hover:bg-[#35373c]"
           >
-            Janela
+            PiP
           </button>
           <button
             type="button"
             onClick={handleFullscreen}
-            className="cursor-pointer rounded bg-[#23252a] px-2 py-1 text-[11px] font-medium text-zinc-300 hover:bg-[#2f3238] hover:text-white"
+            className="cursor-pointer rounded bg-[#2b2d31] px-2.5 py-1 text-[11px] font-medium text-zinc-200 hover:bg-[#35373c]"
           >
             Tela Cheia
           </button>
         </div>
       </div>
-
-      {/* Video Player */}
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        muted={isLocal || muted || deafened}
-        className="aspect-video w-full bg-black object-contain"
-      />
     </div>
   )
 }
