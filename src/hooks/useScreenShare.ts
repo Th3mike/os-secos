@@ -21,6 +21,40 @@ const ICE_SERVERS: RTCConfiguration = {
 }
 
 /**
+ * Forces Hardware H.264 (NVENC / AMD AMF / Intel QuickSync) as the preferred video codec
+ * so CPU-bound VP8 screen-content encoding never collapses a user's stream to 1 FPS!
+ */
+function preferHardwareH264Codec(pc: RTCPeerConnection) {
+  try {
+    if (typeof RTCRtpSender === 'undefined' || !RTCRtpSender.getCapabilities) return
+    const caps = RTCRtpSender.getCapabilities('video')
+    if (!caps || !caps.codecs) return
+
+    const h264Codecs = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/h264')
+    const vp9Codecs = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/vp9')
+    const otherCodecs = caps.codecs.filter(
+      (c) =>
+        c.mimeType.toLowerCase() !== 'video/h264' &&
+        c.mimeType.toLowerCase() !== 'video/vp9'
+    )
+
+    if (h264Codecs.length === 0) return
+
+    const ordered = [...h264Codecs, ...vp9Codecs, ...otherCodecs]
+    for (const transceiver of pc.getTransceivers()) {
+      if (
+        transceiver.sender.track?.kind === 'video' &&
+        typeof transceiver.setCodecPreferences === 'function'
+      ) {
+        transceiver.setCodecPreferences(ordered)
+      }
+    }
+  } catch {
+    // Ignore if browser doesn't support setCodecPreferences
+  }
+}
+
+/**
  * Boosts WebRTC SDP bandwidth & Google WebRTC congestion control floor (`x-google-min-bitrate`, `x-google-start-bitrate`, `b=AS:`)
  * so Chromium never starts at 300kbps (540p) or collapses to 1 FPS!
  */
@@ -28,15 +62,16 @@ function boostSdpVideoBandwidth(sdp: string, resolution: '720p' | '1080p' | '144
   const maxKbps =
     resolution === '1440p'
       ? fps === 120
-        ? 16000
-        : 12000
+        ? 14000
+        : 10000
       : resolution === '1080p'
         ? fps === 120
-          ? 10000
-          : 8000
-        : 5000
-  const startKbps = Math.round(maxKbps * 0.65)
-  const minKbps = 2500
+          ? 9000
+          : 6500
+        : 4500
+  const startKbps = Math.round(maxKbps * 0.6)
+  // Keep minKbps at 800 kbps so users with 2-4 Mbps upload never suffer buffer bloat / 1 FPS drops!
+  const minKbps = 800
 
   let lines = sdp.split('\r\n')
   const out: string[] = []
@@ -336,31 +371,34 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
   const applySenderHighQualityParameters = useCallback(async (pc: RTCPeerConnection) => {
     const opts = shareOptionsRef.current
-    // High bitrates for crystal-clear sharpness & smooth 60/120fps without blockiness:
-    const baseBps =
+    const screenBaseBps =
       opts.resolution === '1440p'
-        ? 14_000_000
+        ? 12_000_000
         : opts.resolution === '1080p'
-          ? 8_500_000
-          : 5_000_000
-    const maxBitrate = opts.fps === 120 ? Math.round(baseBps * 1.35) : baseBps
+          ? 7_500_000
+          : 4_500_000
+    const screenMaxBitrate = opts.fps === 120 ? Math.round(screenBaseBps * 1.3) : screenBaseBps
+    const webcamTrackId = localWebcamStreamRef.current?.getVideoTracks()[0]?.id
+
+    preferHardwareH264Codec(pc)
 
     for (const sender of pc.getSenders()) {
       if (sender.track && sender.track.kind === 'video') {
+        const isWebcamTrack = Boolean(webcamTrackId && sender.track.id === webcamTrackId)
         try {
           const params = sender.getParameters()
           if (!params.encodings || params.encodings.length === 0) {
             params.encodings = [{}]
           }
-          params.encodings[0].maxBitrate = maxBitrate
-          params.encodings[0].maxFramerate = opts.fps
+          // Webcam gets dedicated 4.5 Mbps @ 60 FPS; Screen Share gets up to 15 Mbps @ 60/120 FPS
+          params.encodings[0].maxBitrate = isWebcamTrack ? 4_500_000 : screenMaxBitrate
+          params.encodings[0].maxFramerate = isWebcamTrack ? 60 : opts.fps
           params.encodings[0].scaleResolutionDownBy = 1.0
           params.encodings[0].priority = 'high'
           params.encodings[0].networkPriority = 'high'
-          // NEVER use 'maintain-resolution' because WebRTC drops framerate to 1 FPS when bandwidth dips!
-          // Use 'balanced' (or 'maintain-framerate') so the stream ALWAYS stays 60/120 FPS smooth!
+          // ALWAYS 'maintain-framerate' so WebRTC NEVER drops to 1 FPS for any user!
           ;(params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference =
-            'balanced'
+            'maintain-framerate'
           await sender.setParameters(params)
         } catch {
           // Ignore if browser doesn't support specific encoding param
@@ -727,18 +765,9 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
         const [videoTrack] = stream.getVideoTracks()
         if (videoTrack) {
-          // Enforce chosen resolution & frameRate on the captured track itself
-          try {
-            await videoTrack.applyConstraints({
-              width: { ideal: widthMap[options.resolution] },
-              height: { ideal: heightMap[options.resolution] },
-              frameRate: { min: 24, ideal: options.fps },
-            })
-          } catch {
-            // Ignore if OS capture source locks resolution
-          }
-          // NEVER set contentHint = 'detail' — in WebRTC screen sharing, 'detail' forces a 1-5 FPS slideshow!
-          // Always use 'motion' so the encoder keeps 30/60/120 FPS smooth at all times!
+          // IMPORTANT: Do NOT pass frameRate: { min: 24 } on screen-share tracks!
+          // On Windows, Desktop Duplication stops emitting frames when the screen is static,
+          // and a 'min' frameRate constraint causes the Chromium capturer to stall at 1 FPS!
           videoTrack.contentHint = 'motion'
           videoTrack.onended = () => {
             stopScreenShare()
@@ -1087,7 +1116,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             await videoTrack.applyConstraints({
               width: { ideal: widthMap[options.resolution] },
               height: { ideal: heightMap[options.resolution] },
-              frameRate: { min: 24, ideal: options.fps },
+              frameRate: { ideal: options.fps },
             })
             videoTrack.contentHint = 'motion'
           } catch {
@@ -1139,14 +1168,29 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     }
 
     try {
-      const camStream = await navigator.mediaDevices.getUserMedia({
-        video: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          frameRate: { ideal: 30 },
-        },
-        audio: false,
-      })
+      let camStream: MediaStream
+      try {
+        // Try Full HD 1080p @ 60 FPS first for crystal-clear high-FPS Kabeka!
+        camStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            frameRate: { ideal: 60 },
+            facingMode: 'user',
+          },
+          audio: false,
+        })
+      } catch {
+        // Fallback to 720p @ 60 FPS if webcam doesn't support 1080p
+        camStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+            frameRate: { ideal: 60 },
+          },
+          audio: false,
+        })
+      }
 
       const [camTrack] = camStream.getVideoTracks()
       if (camTrack) {

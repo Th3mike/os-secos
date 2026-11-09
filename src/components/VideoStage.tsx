@@ -76,10 +76,13 @@ export function VideoStage({
       if (delta >= 1000) {
         const currentFps = Math.round((frameCount * 1000) / delta)
         const settings = stream.getVideoTracks()[0]?.getSettings()
+        const targetFps = Math.round(settings?.frameRate || 0)
         setLiveStats({
           width: videoEl.videoWidth || settings?.width || 0,
           height: videoEl.videoHeight || settings?.height || 0,
-          fps: currentFps || Math.round(settings?.frameRate || 0),
+          // When a desktop screen is static (no mouse/window movement), Windows Desktop Duplication sends 1-2 keepalive frames/sec
+          // even though the stream is 60/120fps ready! Show actual motion FPS or configured track FPS when idle.
+          fps: currentFps <= 2 && targetFps >= 30 ? targetFps : currentFps || targetFps,
         })
         frameCount = 0
         lastTime = now
