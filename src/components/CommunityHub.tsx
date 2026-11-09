@@ -423,6 +423,8 @@ export function CommunityHub() {
     updateShareQuality,
     speakingPeers,
     peerMuteStates,
+    peerWatchingMap,
+    broadcastWatchingState,
     activePrank,
     setActivePrank,
     watchState,
@@ -821,6 +823,42 @@ export function CommunityHub() {
     allStreams.find((s) => s.id === focusedStreamId) ||
     (allStreams.length === 1 ? allStreams[0] : null)
 
+  // Broadcast which streamer's screen/webcam we are currently watching on stage
+  const myVisibleStreamerIdsKey =
+    selectedChannel.type === 'voice' &&
+    activeVoiceRoom?.id === selectedChannel.id &&
+    !showWatchTogether &&
+    !watchState?.active
+      ? (activeFocusedStream ? [activeFocusedStream.user.id] : allStreams.map((s) => s.user.id))
+          .filter((id) => id !== user?.id)
+          .filter((id, idx, arr) => arr.indexOf(id) === idx)
+          .sort()
+          .join(',')
+      : ''
+
+  useEffect(() => {
+    const ids = myVisibleStreamerIdsKey ? myVisibleStreamerIdsKey.split(',') : []
+    broadcastWatchingState(ids)
+  }, [myVisibleStreamerIdsKey, broadcastWatchingState])
+
+  const getStreamViewers = (streamerUserId: string): UserProfile[] => {
+    const map = new Map<string, UserProfile>()
+    Object.entries(peerWatchingMap).forEach(([viewerId, info]) => {
+      if (viewerId === streamerUserId) return
+      if (info.watchingIds.includes(streamerUserId)) {
+        map.set(viewerId, info.user)
+      }
+    })
+    if (
+      user &&
+      user.id !== streamerUserId &&
+      myVisibleStreamerIdsKey.split(',').includes(streamerUserId)
+    ) {
+      map.set(user.id, user)
+    }
+    return Array.from(map.values())
+  }
+
   const textChannels = channels.filter((c) => c.type === 'text')
   const voiceChannels = channels.filter((c) => c.type === 'voice')
 
@@ -1140,8 +1178,20 @@ export function CommunityHub() {
                                   </span>
                                 )}
                                 {streaming && (
-                                  <span className="rounded bg-[#da373c] px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-white uppercase">
+                                  <span
+                                    title={
+                                      isConnectedHere && getStreamViewers(peer.id).length > 0
+                                        ? `Assistindo: ${getStreamViewers(peer.id)
+                                            .map((v) => v.username)
+                                            .join(', ')}`
+                                        : 'Transmitindo tela'
+                                    }
+                                    className="rounded bg-[#da373c] px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-white uppercase"
+                                  >
                                     AO VIVO
+                                    {isConnectedHere && getStreamViewers(peer.id).length > 0
+                                      ? ` • 👁️ ${getStreamViewers(peer.id).length}`
+                                      : ''}
                                   </span>
                                 )}
                               </div>
@@ -1819,6 +1869,7 @@ export function CommunityHub() {
                           ? resolution
                           : undefined
                       }
+                      viewers={getStreamViewers(activeFocusedStream.user.id)}
                       onToggleFocus={
                         allStreams.length > 1
                           ? () => setFocusedStreamId(null)
@@ -1904,6 +1955,7 @@ export function CommunityHub() {
                       isFocused={false}
                       targetFps={item.isLocal && !item.isWebcam ? fps : undefined}
                       targetResolution={item.isLocal && !item.isWebcam ? resolution : undefined}
+                      viewers={getStreamViewers(item.user.id)}
                       onToggleFocus={() => setFocusedStreamId(item.id)}
                     />
                   ))}

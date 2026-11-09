@@ -210,6 +210,9 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const [peerMuteStates, setPeerMuteStates] = useState<
     Record<string, { isMuted: boolean; isDeafened: boolean }>
   >({})
+  const [peerWatchingMap, setPeerWatchingMap] = useState<
+    Record<string, { user: UserProfile; watchingIds: string[] }>
+  >({})
   const [activePrank, setActivePrank] = useState<PrankEvent | null>(null)
   const [watchState, setWatchState] = useState<WatchTogetherState | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -232,6 +235,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const micSettingsRef = useRef<MicAudioSettings>(micSettings)
   const micEnabledRef = useRef(false)
   const deafenedRef = useRef(false)
+  const myWatchingIdsRef = useRef<string[]>([])
   const watchStateRef = useRef<WatchTogetherState | null>(null)
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
   const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map())
@@ -277,6 +281,12 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     })
     setRemoteWebcams((prev) => prev.filter((item) => item.peerId !== peerId))
     setRemoteAudios((prev) => prev.filter((item) => item.peerId !== peerId))
+    setPeerWatchingMap((prev) => {
+      if (!prev[peerId]) return prev
+      const copy = { ...prev }
+      delete copy[peerId]
+      return copy
+    })
   }, [])
 
   const sendSignal = useCallback((payload: SignalPayload) => {
@@ -593,6 +603,15 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
               isMuted: !micEnabledRef.current,
               isDeafened: deafenedRef.current,
             })
+            if (myWatchingIdsRef.current.length > 0) {
+              sendSignal({
+                type: 'watching-state',
+                from: curMe.id,
+                fromUser: curMe,
+                to: sig.from,
+                watchingIds: myWatchingIdsRef.current,
+              })
+            }
           } else if (sig.type === 'offer' && sig.sdp) {
             if (sig.screenStreamId !== undefined || sig.webcamStreamId !== undefined) {
               peerMediaIdsRef.current.set(sig.from, {
@@ -672,6 +691,14 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
                 isDeafened: Boolean(sig.isDeafened),
               },
             }))
+          } else if (sig.type === 'watching-state') {
+            setPeerWatchingMap((prev) => ({
+              ...prev,
+              [sig.from]: {
+                user: sig.fromUser,
+                watchingIds: Array.isArray(sig.watchingIds) ? sig.watchingIds : [],
+              },
+            }))
           } else if (sig.type === 'prank' && sig.prank) {
             setActivePrank(sig.prank)
             if (!deafenedRef.current) {
@@ -718,6 +745,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       setRemoteStreams([])
       setRemoteWebcams([])
       setRemoteAudios([])
+      setPeerWatchingMap({})
       supabase.removeChannel(channel)
       channelRef.current = null
     }
@@ -785,26 +813,22 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           localStreamRef.current.getTracks().forEach((t) => t.stop())
         }
 
-        const videoConstraints: MediaTrackConstraints & { displaySurface?: string } = {
-          width: { ideal: widthMap[options.resolution] },
-          height: { ideal: heightMap[options.resolution] },
-          frameRate: { ideal: options.fps },
-        }
-        if (options.surface) {
-          videoConstraints.displaySurface = options.surface
-        }
-
-        // Request exact ideal resolution & FPS without hard max that breaks 60Hz monitors
+        // IMPORTANT:
+        // 1) Do NOT pass `displaySurface` into getDisplayMedia video constraints on Windows Edge/Chromium!
+        //    Passing `displaySurface: 'monitor' | 'window'` forces the DXGI Desktop Duplication / Window enumeration
+        //    hook inside Windows DWM / explorer.exe to spin and spike explorer.exe CPU until the taskbar freezes!
+        // 2) Request clean ideal resolution & FPS and let the native browser picker handle surface selection smoothly.
         const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: videoConstraints,
+          video: {
+            width: { ideal: widthMap[options.resolution] },
+            height: { ideal: heightMap[options.resolution] },
+            frameRate: { ideal: options.fps },
+          },
           audio: options.includeAudio
             ? {
                 echoCancellation: false,
                 noiseSuppression: false,
                 autoGainControl: false,
-                // @ts-expect-error Chromium system audio capture hints
-                systemAudio: 'include',
-                suppressLocalAudioPlayback: false,
               }
             : false,
         })
@@ -1262,6 +1286,25 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     }
   }, [renegotiateAllPeers, stopWebcam, webcamEnabled])
 
+  const broadcastWatchingState = useCallback(
+    (watchingIds: string[]) => {
+      const me = currentUserRef.current
+      if (!me) return
+      const prevKey = myWatchingIdsRef.current.slice().sort().join(',')
+      const nextKey = watchingIds.slice().sort().join(',')
+      myWatchingIdsRef.current = watchingIds
+      if (prevKey === nextKey) return
+
+      sendSignal({
+        type: 'watching-state',
+        from: me.id,
+        fromUser: me,
+        watchingIds,
+      })
+    },
+    [sendSignal]
+  )
+
   return {
     localStream,
     isSharing,
@@ -1279,6 +1322,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     updateShareQuality,
     speakingPeers,
     peerMuteStates,
+    peerWatchingMap,
+    broadcastWatchingState,
     activePrank,
     setActivePrank,
     watchState,

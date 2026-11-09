@@ -75,6 +75,7 @@ export interface SignalPayload {
     | 'stop-webcam'
     | 'speaking-state'
     | 'mute-state'
+    | 'watching-state'
     | 'prank'
     | 'watch-sync'
   from: string
@@ -85,6 +86,7 @@ export interface SignalPayload {
   isSpeaking?: boolean
   isMuted?: boolean
   isDeafened?: boolean
+  watchingIds?: string[]
   prank?: PrankEvent
   watchState?: WatchTogetherState | null
   screenStreamId?: string | null
