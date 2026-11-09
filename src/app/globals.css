@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+:root {
+  --osrs-bg-dark: #16130f;
+  --osrs-stone: #2b241c;
+  --osrs-stone-light: #3e3529;
+  --osrs-border: #5c5040;
+  --osrs-border-dark: #1a1612;
+  --osrs-parchment: #c6b497;
+  --osrs-parchment-dark: #a89678;
+  --osrs-yellow: #ffff00;
+  --osrs-orange: #ff981f;
+  --osrs-green: #00ff00;
+  --osrs-red: #ff3333;
+}
+
+body {
+  background-color: var(--osrs-bg-dark);
+  color: var(--osrs-orange);
+  font-family: "Courier New", Courier, monospace;
+}
+
+/* OldSchool RuneScape Stone Panel */
+.osrs-panel {
+  background-color: var(--osrs-stone);
+  border: 2px solid var(--osrs-border);
+  box-shadow:
+    inset 2px 2px 0px #4f4436,
+    inset -2px -2px 0px #191510,
+    0 2px 6px rgba(0, 0, 0, 0.85);
+}
+
+/* OldSchool RuneScape Inset Box */
+.osrs-inset {
+  background-color: #1c1712;
+  border: 2px solid #120f0b;
+  box-shadow:
+    inset 2px 2px 0px #0d0b08,
+    inset -1px -1px 0px #3a3126;
+}
+
+/* OldSchool RuneScape Parchment Box (Chat style) */
+.osrs-parchment {
+  background-color: var(--osrs-parchment);
+  color: #000000;
+  border: 2px solid #473d30;
+  box-shadow:
+    inset 2px 2px 0px #dfd0b8,
+    inset -2px -2px 0px #8f7e63;
+}
+
+/* OldSchool 3D Bevel Button */
+.osrs-btn {
+  background-color: #3e3529;
+  color: var(--osrs-yellow);
+  border-top: 2px solid #6b5e4c;
+  border-left: 2px solid #6b5e4c;
+  border-right: 2px solid #1e1913;
+  border-bottom: 2px solid #1e1913;
+  text-shadow: 1px 1px 0px #000000;
+  font-weight: bold;
+  cursor: pointer;
+  transition: filter 0.1s;
+}
+
+.osrs-btn:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+
+.osrs-btn:active:not(:disabled) {
+  border-top: 2px solid #1e1913;
+  border-left: 2px solid #1e1913;
+  border-right: 2px solid #6b5e4c;
+  border-bottom: 2px solid #6b5e4c;
+}
+
+.osrs-btn-active {
+  background-color: #5c241c;
+  border-top: 2px solid #8a3a2e;
+  border-left: 2px solid #8a3a2e;
+  border-right: 2px solid #2b100c;
+  border-bottom: 2px solid #2b100c;
+  color: var(--osrs-yellow);
+}
+
+.osrs-text-shadow {
+  text-shadow: 1px 1px 0px #000000;
+}
