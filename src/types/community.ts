@@ -54,6 +54,7 @@ export interface PrankEvent {
 
 export type CinemaModelType =
   | 'anime-vrm'
+  | 'anime-glasses-vrm'
   | 'streetwear-rpm'
   | 'dancer-girl'
   | 'soldier-tactical'

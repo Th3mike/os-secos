@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as THREE from 'three'
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js'
+import { CSS3DRenderer, CSS3DObject } from 'three/examples/jsm/renderers/CSS3DRenderer.js'
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js'
 import { VRMLoaderPlugin } from '@pixiv/three-vrm'
 import {
@@ -33,7 +34,7 @@ interface WatchTogetherStageProps {
   onStartTabShare: () => void
 }
 
-const AVATAR_STORAGE_KEY = 'os_secos_cinema_avatar_v2'
+const AVATAR_STORAGE_KEY = 'os_secos_cinema_avatar_v3'
 
 export const REAL_3D_MODELS: {
   id: CinemaModelType
@@ -43,49 +44,57 @@ export const REAL_3D_MODELS: {
   url: string
 }[] = [
   {
-    id: 'streetwear-rpm',
-    name: 'Humano 3D Realista (ReadyPlayerMe)',
-    desc: 'Jaqueta, Calça, Tênis, Barba e Rosto 3D articulado',
-    badge: '👟 Roupas Reais',
-    url: 'https://threejs.org/examples/models/gltf/readyplayer.me.glb',
-  },
-  {
     id: 'anime-vrm',
     name: 'Garota Anime 3D (VRoid Studio VRM)',
-    desc: 'Modelo oficial VRM de Anime com cabelo, saia, blusa e olhos 3D',
+    desc: 'Personagem oficial de Anime 3D com cabelo, saia, blusa e olhos anime',
     badge: '🌸 Anime VRM Real',
     url: 'https://pixiv.github.io/three-vrm/packages/three-vrm/examples/models/VRM1_Constraint_Twist_Sample.vrm',
   },
   {
+    id: 'anime-glasses-vrm',
+    name: 'Estudante Anime 3D (VRoid Óculos)',
+    desc: 'Modelo VRM de Anime com óculos, uniforme e cabelo longo 3D',
+    badge: '👓 Anime VRM 2',
+    url: 'https://raw.githubusercontent.com/josephrocca/ChatVRM-js/main/avatars/5575583359519712199.vrm',
+  },
+  {
     id: 'dancer-girl',
-    name: 'Michelle — Dançarina 3D (Mixamo)',
-    desc: 'Personagem feminina 3D com jaqueta jeans, tênis e captura de dança',
+    name: 'Michelle — Garota Streetwear 3D',
+    desc: 'Personagem feminina 3D com jaqueta jeans, calça, tênis e dança real',
     badge: '💃 Mixamo 3D',
     url: 'https://threejs.org/examples/models/gltf/Michelle.glb',
   },
   {
     id: 'soldier-tactical',
-    name: 'Vanguard — Soldado Tático 3D',
-    desc: 'Armadura militar completa, capacete com visor e mochila tática',
-    badge: '🪖 Militar 3D',
+    name: 'Vanguard — Guerreiro Tático 3D',
+    desc: 'Armadura completa, capacete com visor e mochila tática',
+    badge: '🪖 Guerreiro 3D',
     url: 'https://threejs.org/examples/models/gltf/Soldier.glb',
   },
   {
     id: 'cyborg-xbot',
-    name: 'X-Bot — Androide Cyberpunk 3D',
-    desc: 'Corpo biomecânico articulado de alta precisão Mixamo',
-    badge: '⚡ Cyborg 3D',
+    name: 'X-Bot — Lutador / Ninja 3D',
+    desc: 'Corpo estilizado de anime/luta com todas as animações Mixamo',
+    badge: '⚡ Lutador 3D',
     url: 'https://threejs.org/examples/models/gltf/Xbot.glb',
   },
   {
+    id: 'streetwear-rpm',
+    name: 'Humano Casual 3D (ReadyPlayerMe)',
+    desc: 'Homem 3D com jaqueta, calça, tênis e barba estilizada',
+    badge: '👟 Casual 3D',
+    url: 'https://threejs.org/examples/models/gltf/readyplayer.me.glb',
+  },
+  {
     id: 'robot-bot',
-    name: 'Robô Expressivo 3D (14 Animações)',
-    desc: 'Robô carismático com animações nativas de dança, pulo e saudação',
+    name: 'Robô Mecha Expressivo 3D',
+    desc: 'Robô carismático com 14 animações nativas de dança, pulo e saudação',
     badge: '🤖 Mecha 3D',
     url: 'https://threejs.org/examples/models/gltf/RobotExpressive/RobotExpressive.glb',
   },
 ]
 
+// Distinct 3D models assigned to each preset (no more repeating the bearded man!)
 export const ANIME_PRESETS: {
   id: CinemaPresetId
   name: string
@@ -93,42 +102,72 @@ export const ANIME_PRESETS: {
   config: CinemaAvatarConfig
 }[] = [
   {
-    id: 'goku',
-    name: 'Goku SSJ (Humano 3D)',
-    badge: '🐉 DBZ 3D',
-    config: {
-      presetId: 'goku',
-      modelType: 'streetwear-rpm',
-      shirtColor: '#f97316',
-      pantsColor: '#1d4ed8',
-      hairStyle: 'spiky-gold',
-      hatStyle: 'none',
-      accessory: 'popcorn',
-      aura: 'super-saiyan',
-    },
-  },
-  {
     id: 'naruto',
-    name: 'Anime VRoid (Chakra)',
+    name: 'Sakura / Garota Anime VRM',
     badge: '🌸 Anime VRM',
     config: {
       presetId: 'naruto',
       modelType: 'anime-vrm',
-      shirtColor: '#fb923c',
+      shirtColor: '#ec4899',
       pantsColor: '#18181b',
       hairStyle: 'none',
-      hatStyle: 'headband',
+      hatStyle: 'cat-ears',
+      accessory: 'popcorn',
+      aura: 'none',
+    },
+  },
+  {
+    id: 'tanjiro',
+    name: 'Caçadora de Onis (Anime VRM)',
+    badge: '🗡️ Demon Slayer',
+    config: {
+      presetId: 'tanjiro',
+      modelType: 'anime-glasses-vrm',
+      shirtColor: '#10b981',
+      pantsColor: '#18181b',
+      hairStyle: 'none',
+      hatStyle: 'none',
       accessory: 'katana',
-      aura: 'blue-chakra',
+      aura: 'fire-red',
+    },
+  },
+  {
+    id: 'goku',
+    name: 'Guerreiro Super Saiyajin',
+    badge: '🐉 DBZ SSJ',
+    config: {
+      presetId: 'goku',
+      modelType: 'cyborg-xbot',
+      shirtColor: '#f97316',
+      pantsColor: '#1d4ed8',
+      hairStyle: 'spiky-gold',
+      hatStyle: 'none',
+      accessory: 'none',
+      aura: 'super-saiyan',
+    },
+  },
+  {
+    id: 'gojo',
+    name: 'Feiticeiro Jujutsu (Gojo)',
+    badge: '🤞 Energia Roxa',
+    config: {
+      presetId: 'gojo',
+      modelType: 'cyborg-xbot',
+      shirtColor: '#1e1b4b',
+      pantsColor: '#09090b',
+      hairStyle: 'anime-white',
+      hatStyle: 'none',
+      accessory: 'popcorn',
+      aura: 'purple-curse',
     },
   },
   {
     id: 'luffy',
-    name: 'Luffy Chapéu de Palha',
-    badge: '🏴‍☠️ One Piece 3D',
+    name: 'Pirata Chapéu de Palha',
+    badge: '🏴‍☠️ One Piece',
     config: {
       presetId: 'luffy',
-      modelType: 'streetwear-rpm',
+      modelType: 'dancer-girl',
       shirtColor: '#dc2626',
       pantsColor: '#2563eb',
       hairStyle: 'none',
@@ -138,39 +177,9 @@ export const ANIME_PRESETS: {
     },
   },
   {
-    id: 'gojo',
-    name: 'Satoru Gojo (Jujutsu)',
-    badge: '🤞 Gojo 3D',
-    config: {
-      presetId: 'gojo',
-      modelType: 'streetwear-rpm',
-      shirtColor: '#1e1b4b',
-      pantsColor: '#09090b',
-      hairStyle: 'anime-white',
-      hatStyle: 'none',
-      accessory: 'blindfold',
-      aura: 'purple-curse',
-    },
-  },
-  {
-    id: 'tanjiro',
-    name: 'Michelle Dançarina',
-    badge: '💃 Mixamo 3D',
-    config: {
-      presetId: 'tanjiro',
-      modelType: 'dancer-girl',
-      shirtColor: '#10b981',
-      pantsColor: '#18181b',
-      hairStyle: 'none',
-      hatStyle: 'cat-ears',
-      accessory: 'popcorn',
-      aura: 'fire-red',
-    },
-  },
-  {
     id: 'akatsuki',
-    name: 'Soldado Tático Elite',
-    badge: '🪖 Vanguard 3D',
+    name: 'Vanguard — Soldado de Elite',
+    badge: '🪖 Tático 3D',
     config: {
       presetId: 'akatsuki',
       modelType: 'soldier-tactical',
@@ -184,23 +193,23 @@ export const ANIME_PRESETS: {
   },
   {
     id: 'cyberpunk',
-    name: 'Cyborg Neon X-Bot',
-    badge: '⚡ Cyberpunk 3D',
+    name: 'Streetwear Casual (RPM)',
+    badge: '👟 Casual 3D',
     config: {
       presetId: 'cyberpunk',
-      modelType: 'cyborg-xbot',
+      modelType: 'streetwear-rpm',
       shirtColor: '#eab308',
-      pantsColor: '#06b6d4',
+      pantsColor: '#1e293b',
       hairStyle: 'none',
-      hatStyle: 'halo',
-      accessory: 'wings',
+      hatStyle: 'crown',
+      accessory: 'popcorn',
       aura: 'blue-chakra',
     },
   },
   {
     id: 'king-seco',
-    name: 'Rei Robô Mecha',
-    badge: '👑 Mecha 3D',
+    name: 'Rei Mecha dos Secos',
+    badge: '👑 Robô 3D',
     config: {
       presetId: 'king-seco',
       modelType: 'robot-bot',
@@ -208,7 +217,7 @@ export const ANIME_PRESETS: {
       pantsColor: '#facc15',
       hairStyle: 'none',
       hatStyle: 'crown',
-      accessory: 'popcorn',
+      accessory: 'wings',
       aura: 'super-saiyan',
     },
   },
@@ -216,71 +225,101 @@ export const ANIME_PRESETS: {
 
 const CATALOG_MOVIES: {
   title: string
+  posterTitle: string
+  posterSub: string
   category: string
   duration: string
   provider: WatchTogetherState['provider']
   url: string
   badgeColor: string
+  posterBg: string
 }[] = [
   {
     title: 'Big Buck Bunny (Animação 3D HD)',
+    posterTitle: 'BIG BUCK BUNNY',
+    posterSub: 'ANIMAÇÃO 3D • COMÉDIA',
     category: 'Comédia / Curta',
     duration: '10 min',
     provider: 'mp4',
-    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
+    url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.720p.vp9.webm',
     badgeColor: '#22c55e',
+    posterBg: '#14532d',
   },
   {
-    title: 'Sintel — O Dragão Guardião (Blender)',
-    category: 'Fantasia / Épico',
+    title: 'Sintel — O Dragão Guardião',
+    posterTitle: 'SINTEL',
+    posterSub: 'FANTASIA ÉPICA • DRAGÕES',
+    category: 'Fantasia / Ação',
     duration: '15 min',
     provider: 'mp4',
-    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
+    url: 'https://mdn.github.io/learning-area/javascript/apis/video-audio/finished/video/sintel-short.mp4',
     badgeColor: '#f59e0b',
+    posterBg: '#7c2d12',
   },
   {
-    title: 'Tears of Steel (Sci-Fi Cyberpunk)',
-    category: 'Ficção Científica',
-    duration: '12 min',
-    provider: 'mp4',
-    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
+    title: 'Caminandes: Llamigos (Blender Studio)',
+    posterTitle: 'LLAMIGOS',
+    posterSub: 'AVENTURA 3D • HUMOR',
+    category: 'Animação HD',
+    duration: '3 min',
+    provider: 'youtube',
+    url: 'https://www.youtube.com/watch?v=Z4C82eyhwgU',
     badgeColor: '#0ea5e9',
+    posterBg: '#0c4a6e',
   },
   {
-    title: 'Elephants Dream (Surreal 3D)',
-    category: 'Sci-Fi / Animação',
-    duration: '11 min',
-    provider: 'mp4',
-    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ElephantsDream.mp4',
+    title: 'Spring — O Espírito da Floresta (Blender)',
+    posterTitle: 'SPRING',
+    posterSub: 'FANTASIA • BLENDER OPEN MOVIE',
+    category: 'Fantasia / Curta',
+    duration: '8 min',
+    provider: 'youtube',
+    url: 'https://www.youtube.com/watch?v=WhWc3b3KhnY',
     badgeColor: '#a855f7',
+    posterBg: '#4c1d95',
+  },
+  {
+    title: 'Charge — Cyberpunk Sci-Fi (Blender)',
+    posterTitle: 'CHARGE',
+    posterSub: 'CYBERPUNK • AÇÃO 4K',
+    category: 'Ficção Científica',
+    duration: '4 min',
+    provider: 'youtube',
+    url: 'https://www.youtube.com/watch?v=UXqq0ZvbOnk',
+    badgeColor: '#ec4899',
+    posterBg: '#831843',
   },
   {
     title: 'Lofi Hip Hop Radio — Beats to Chill/Game',
+    posterTitle: 'LOFI RADIO',
+    posterSub: 'AO VIVO 24/7 • MÚSICA',
     category: 'YouTube Ao Vivo',
     duration: 'LIVE',
     provider: 'youtube',
     url: 'https://www.youtube.com/watch?v=jfKfPfyJRdk',
     badgeColor: '#ef4444',
+    posterBg: '#7f1d1d',
   },
 ]
 
-// 14 Cinema Seats arranged in 2 tiered rows facing the giant screen (z = -11)
-export const CINEMA_SEATS: { index: number; row: number; x: number; y: number; z: number }[] = [
-  { index: 0, row: 1, x: -6.6, y: 0.1, z: -2.2 },
-  { index: 1, row: 1, x: -4.4, y: 0.1, z: -2.2 },
-  { index: 2, row: 1, x: -2.2, y: 0.1, z: -2.2 },
-  { index: 3, row: 1, x: 0.0, y: 0.1, z: -2.2 },
-  { index: 4, row: 1, x: 2.2, y: 0.1, z: -2.2 },
-  { index: 5, row: 1, x: 4.4, y: 0.1, z: -2.2 },
-  { index: 6, row: 1, x: 6.6, y: 0.1, z: -2.2 },
-  { index: 7, row: 2, x: -6.6, y: 0.7, z: 1.2 },
-  { index: 8, row: 2, x: -4.4, y: 0.7, z: 1.2 },
-  { index: 9, row: 2, x: -2.2, y: 0.7, z: 1.2 },
-  { index: 10, row: 2, x: 0.0, y: 0.7, z: 1.2 },
-  { index: 11, row: 2, x: 2.2, y: 0.7, z: 1.2 },
-  { index: 12, row: 2, x: 4.4, y: 0.7, z: 1.2 },
-  { index: 13, row: 2, x: 6.6, y: 0.7, z: 1.2 },
-]
+// 36 Plush Cinema Armchairs across 4 Tiered Stadium Rows (9 seats per row, with side aisles!)
+export const CINEMA_SEATS: { index: number; row: number; x: number; y: number; z: number }[] = (() => {
+  const list: { index: number; row: number; x: number; y: number; z: number }[] = []
+  const rowConfigs = [
+    { row: 1, z: -6.2, y: 0.1 },
+    { row: 2, z: -2.4, y: 0.65 },
+    { row: 3, z: 1.4, y: 1.25 },
+    { row: 4, z: 5.2, y: 1.85 },
+  ]
+  const xCols = [-8.8, -6.6, -4.4, -2.2, 0.0, 2.2, 4.4, 6.6, 8.8]
+  let idx = 0
+  for (const r of rowConfigs) {
+    for (const x of xCols) {
+      list.push({ index: idx++, row: r.row, x, y: r.y, z: r.z })
+    }
+  }
+  return list
+})()
 
 export function loadSavedCinemaAvatar(): CinemaAvatarConfig {
   if (typeof window === 'undefined') return ANIME_PRESETS[0].config
@@ -379,6 +418,7 @@ export function parseMediaUrl(rawUrl: string): {
 let sharedGltfLoader: GLTFLoader | null = null
 const gltfPromiseCache = new Map<string, Promise<GLTF>>()
 const sharedMocapClips: Record<string, THREE.AnimationClip> = {}
+const mocapClipListeners = new Set<() => void>()
 
 function getGltfLoader(): GLTFLoader {
   if (!sharedGltfLoader) {
@@ -408,7 +448,6 @@ function loadCachedGLTF(url: string): Promise<GLTF> {
   return promise
 }
 
-// Preload motion-capture animation clips (Walk, Run, Idle, Agree, Dance) from Xbot & Michelle
 let mocapPreloadStarted = false
 function ensureMocapClipsLoaded() {
   if (mocapPreloadStarted) return
@@ -419,6 +458,7 @@ function ensureMocapClipsLoaded() {
       gltf.animations.forEach((clip) => {
         sharedMocapClips[clip.name.toLowerCase()] = clip
       })
+      mocapClipListeners.forEach((cb) => cb())
     })
     .catch(() => {})
 
@@ -429,59 +469,168 @@ function ensureMocapClipsLoaded() {
           sharedMocapClips['sambadance'] = clip
         }
       })
+      mocapClipListeners.forEach((cb) => cb())
     })
     .catch(() => {})
 }
 
-// Retargets a Mixamo AnimationClip so it works seamlessly on both `mixamorig:Bone` (Mixamo)
-// AND non-prefixed `Bone` skeletons (like ReadyPlayerMe Wolf3D)!
-function retargetClipForRoot(clip: THREE.AnimationClip, modelRoot: THREE.Object3D): THREE.AnimationClip {
-  const hasMixamoPrefix = Boolean(modelRoot.getObjectByName('mixamorig:Hips') || modelRoot.getObjectByName('mixamorigHips'))
+// Maps Mixamo bone names onto BOTH ReadyPlayerMe (`Hips`) AND VRoid VRM (`J_Bip_C_Hips`) skeletons!
+const MIXAMO_TO_VRM_BONE_MAP: Record<string, string> = {
+  'mixamorig:Hips': 'J_Bip_C_Hips',
+  'mixamorig:Spine': 'J_Bip_C_Spine',
+  'mixamorig:Spine1': 'J_Bip_C_Chest',
+  'mixamorig:Spine2': 'J_Bip_C_UpperChest',
+  'mixamorig:Neck': 'J_Bip_C_Neck',
+  'mixamorig:Head': 'J_Bip_C_Head',
+  'mixamorig:LeftArm': 'J_Bip_L_UpperArm',
+  'mixamorig:LeftForeArm': 'J_Bip_L_LowerArm',
+  'mixamorig:LeftHand': 'J_Bip_L_Hand',
+  'mixamorig:RightArm': 'J_Bip_R_UpperArm',
+  'mixamorig:RightForeArm': 'J_Bip_R_LowerArm',
+  'mixamorig:RightHand': 'J_Bip_R_Hand',
+  'mixamorig:LeftUpLeg': 'J_Bip_L_UpperLeg',
+  'mixamorig:LeftLeg': 'J_Bip_L_LowerLeg',
+  'mixamorig:LeftFoot': 'J_Bip_L_Foot',
+  'mixamorig:RightUpLeg': 'J_Bip_R_UpperLeg',
+  'mixamorig:RightLeg': 'J_Bip_R_LowerLeg',
+  'mixamorig:RightFoot': 'J_Bip_R_Foot',
+}
+
+function retargetClipForRoot(
+  clip: THREE.AnimationClip,
+  modelRoot: THREE.Object3D
+): THREE.AnimationClip {
+  const hasMixamoPrefix = Boolean(
+    modelRoot.getObjectByName('mixamorig:Hips') || modelRoot.getObjectByName('mixamorigHips')
+  )
+  const isVrmSkeleton = Boolean(modelRoot.getObjectByName('J_Bip_C_Hips'))
+
   const cloned = clip.clone()
-  cloned.tracks = cloned.tracks.map((track) => {
+  const validTracks: THREE.KeyframeTrack[] = []
+
+  cloned.tracks.forEach((track) => {
     const dotIdx = track.name.indexOf('.')
-    if (dotIdx === -1) return track
+    if (dotIdx === -1) return
     let nodeName = track.name.slice(0, dotIdx)
     const propName = track.name.slice(dotIdx)
 
-    if (!hasMixamoPrefix && nodeName.startsWith('mixamorig:')) {
+    // Skip root position translations on VRM so legs don't stretch
+    if (isVrmSkeleton && propName === '.position') return
+
+    if (isVrmSkeleton && MIXAMO_TO_VRM_BONE_MAP[nodeName]) {
+      const mapped = MIXAMO_TO_VRM_BONE_MAP[nodeName]
+      if (modelRoot.getObjectByName(mapped)) {
+        nodeName = mapped
+      }
+    } else if (!hasMixamoPrefix && nodeName.startsWith('mixamorig:')) {
       const stripped = nodeName.replace('mixamorig:', '')
       if (modelRoot.getObjectByName(stripped)) {
         nodeName = stripped
       }
     }
-    const newTrack = track.clone()
-    newTrack.name = `${nodeName}${propName}`
-    return newTrack
+
+    if (modelRoot.getObjectByName(nodeName)) {
+      const newTrack = track.clone()
+      newTrack.name = `${nodeName}${propName}`
+      validTracks.push(newTrack)
+    }
   })
-  return cloned
+
+  return new THREE.AnimationClip(clip.name, clip.duration, validTracks)
 }
 
-function createFloatingUserBadge(avatarUrl: string, username: string): THREE.Sprite {
+function createMoviePosterTexture(
+  title: string,
+  subtitle: string,
+  bgColor: string,
+  accentColor: string
+): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas')
+  canvas.width = 384
+  canvas.height = 576
+  const ctx = canvas.getContext('2d')!
+
+  // Poster Gradient Background
+  const grad = ctx.createLinearGradient(0, 0, 0, 576)
+  grad.addColorStop(0, bgColor)
+  grad.addColorStop(1, '#09090b')
+  ctx.fillStyle = grad
+  ctx.fillRect(0, 0, 384, 576)
+
+  // Glowing Neon Frame
+  ctx.strokeStyle = accentColor
+  ctx.lineWidth = 14
+  ctx.strokeRect(12, 12, 360, 552)
+
+  // Top "EM CARTAZ" header
+  ctx.fillStyle = accentColor
+  ctx.fillRect(42, 40, 300, 48)
+  ctx.fillStyle = '#09090b'
+  ctx.font = '900 26px sans-serif'
+  ctx.textAlign = 'center'
+  ctx.fillText('🍿 EM CARTAZ • 3D', 192, 73)
+
+  // Decorative center artwork emblem
+  ctx.fillStyle = 'rgba(255,255,255,0.08)'
+  ctx.beginPath()
+  ctx.arc(192, 260, 96, 0, Math.PI * 2)
+  ctx.fill()
+  ctx.strokeStyle = accentColor
+  ctx.lineWidth = 5
+  ctx.stroke()
+
+  ctx.fillStyle = '#ffffff'
+  ctx.font = '900 68px sans-serif'
+  ctx.fillText('🎬', 192, 282)
+
+  // Movie Title
+  ctx.fillStyle = '#ffffff'
+  ctx.font = '900 36px sans-serif'
+  ctx.fillText(title.slice(0, 16), 192, 430)
+
+  // Subtitle
+  ctx.fillStyle = accentColor
+  ctx.font = 'bold 20px sans-serif'
+  ctx.fillText(subtitle, 192, 475)
+
+  ctx.fillStyle = '#a1a1aa'
+  ctx.font = 'bold 16px sans-serif'
+  ctx.fillText('CINE OS SECOS • IMAX 120FPS', 192, 525)
+
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.minFilter = THREE.LinearFilter
+  return tex
+}
+
+function createFloatingUserBadge(
+  avatarUrl: string,
+  username: string,
+  loadingText?: string
+): { sprite: THREE.Sprite; updateStatus: (loading?: string) => void } {
   const canvas = document.createElement('canvas')
   canvas.width = 320
   canvas.height = 88
   const ctx = canvas.getContext('2d')!
+  let loadedImg: HTMLImageElement | undefined
+  let curLoading = loadingText
 
-  const draw = (img?: HTMLImageElement) => {
+  const draw = () => {
     ctx.clearRect(0, 0, 320, 88)
-    // Rounded dark pill background
     ctx.fillStyle = 'rgba(15, 17, 23, 0.88)'
-    ctx.strokeStyle = '#f59e0b'
+    ctx.strokeStyle = curLoading ? '#38bdf8' : '#f59e0b'
     ctx.lineWidth = 4
     ctx.beginPath()
     ctx.roundRect(6, 8, 308, 72, 36)
     ctx.fill()
     ctx.stroke()
 
-    // Avatar circle
-    if (img) {
+    if (loadedImg) {
       ctx.save()
       ctx.beginPath()
       ctx.arc(44, 44, 26, 0, Math.PI * 2)
       ctx.closePath()
       ctx.clip()
-      ctx.drawImage(img, 18, 18, 52, 52)
+      ctx.drawImage(loadedImg, 18, 18, 52, 52)
       ctx.restore()
     } else {
       ctx.fillStyle = '#5865f2'
@@ -490,11 +639,16 @@ function createFloatingUserBadge(avatarUrl: string, username: string): THREE.Spr
       ctx.fill()
     }
 
-    // Username text
     ctx.fillStyle = '#ffffff'
-    ctx.font = '900 26px sans-serif'
+    ctx.font = '900 24px sans-serif'
     ctx.textBaseline = 'middle'
-    ctx.fillText(username.slice(0, 14), 82, 46)
+    ctx.fillText(username.slice(0, 13), 82, curLoading ? 34 : 46)
+
+    if (curLoading) {
+      ctx.fillStyle = '#38bdf8'
+      ctx.font = 'bold 15px sans-serif'
+      ctx.fillText(curLoading, 82, 58)
+    }
   }
 
   draw()
@@ -508,22 +662,28 @@ function createFloatingUserBadge(avatarUrl: string, username: string): THREE.Spr
   const img = new Image()
   img.crossOrigin = 'anonymous'
   img.onload = () => {
-    draw(img)
+    loadedImg = img
+    draw()
     tex.needsUpdate = true
   }
   img.src = avatarUrl
 
-  return sprite
+  return {
+    sprite,
+    updateStatus: (loading?: string) => {
+      curLoading = loading
+      draw()
+      tex.needsUpdate = true
+    },
+  }
 }
 
-// Builds a high-detail 3D Striped Cinema Popcorn Bucket with 3D Buttered Popcorn Kernels inside!
 function createDetailed3DPopcornBucket(): {
   bucketGroup: THREE.Group
   eatingKernel: THREE.Mesh
 } {
   const bucketGroup = new THREE.Group()
 
-  // Striped red/white cinema tub texture
   const canvas = document.createElement('canvas')
   canvas.width = 256
   canvas.height = 128
@@ -544,7 +704,6 @@ function createDetailed3DPopcornBucket(): {
   const tubMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.13, 0.34, 20), tubMat)
   bucketGroup.add(tubMesh)
 
-  // Mound of 3D Fluffy Buttered Popcorn Kernels overflowing the top!
   const kernelMat = new THREE.MeshStandardMaterial({
     color: 0xfef08a,
     emissive: 0xca8a04,
@@ -556,20 +715,12 @@ function createDetailed3DPopcornBucket(): {
     const k = new THREE.Mesh(kernelGeo, kernelMat)
     const angle = (i / 18) * Math.PI * 2
     const r = (i % 3) * 0.05
-    k.position.set(
-      Math.cos(angle) * r,
-      0.17 + (i % 2) * 0.035,
-      Math.sin(angle) * r
-    )
+    k.position.set(Math.cos(angle) * r, 0.17 + (i % 2) * 0.035, Math.sin(angle) * r)
     k.rotation.set(i, i * 0.7, 0)
     bucketGroup.add(k)
   }
 
-  // Animated kernel held in right hand when eating popcorn!
-  const eatingKernel = new THREE.Mesh(
-    new THREE.DodecahedronGeometry(0.055, 1),
-    kernelMat
-  )
+  const eatingKernel = new THREE.Mesh(new THREE.DodecahedronGeometry(0.055, 1), kernelMat)
   eatingKernel.visible = false
 
   return { bucketGroup, eatingKernel }
@@ -644,18 +795,14 @@ interface CinemaCharacterInstance {
   talkRing: THREE.Mesh
   configSignature: string
   isVrm: boolean
+  cleanup?: () => void
 }
 
-function attachCosmeticsToRig(
-  rig: BoneRig,
-  root: THREE.Group,
-  config: CinemaAvatarConfig
-) {
+function attachCosmeticsToRig(rig: BoneRig, root: THREE.Group, config: CinemaAvatarConfig) {
   const headTarget = rig.head || root
   const isBoneHead = Boolean(rig.head)
   const headScale = isBoneHead ? 0.55 : 1
 
-  // Anime Hair Attachments on real 3D head bone
   if (config.hairStyle !== 'none') {
     const hairGroup = new THREE.Group()
     hairGroup.scale.setScalar(headScale)
@@ -700,7 +847,6 @@ function attachCosmeticsToRig(
     headTarget.add(hairGroup)
   }
 
-  // Hat Attachments on real 3D head bone
   if (config.hatStyle !== 'none') {
     const hatWrap = new THREE.Group()
     hatWrap.scale.setScalar(headScale)
@@ -763,7 +909,6 @@ function attachCosmeticsToRig(
     headTarget.add(hatWrap)
   }
 
-  // Back / Spine Attachments (Katana with sheath & hilt, Hero Cape, Golden Wings)
   const spineTarget = rig.spine || root
   const isBoneSpine = Boolean(rig.spine)
   if (config.accessory === 'katana') {
@@ -813,11 +958,13 @@ function createCinemaCharacterInstance(
   const modelContainer = new THREE.Group()
   root.add(modelContainer)
 
-  // Floating Discord Avatar + Username Plate above head
-  const badge = createFloatingUserBadge(user.avatar_url, user.username)
+  const { sprite: badge, updateStatus } = createFloatingUserBadge(
+    user.avatar_url,
+    user.username,
+    'Carregando 3D...'
+  )
   root.add(badge)
 
-  // Green Speaking Ring on Floor
   const talkRing = new THREE.Mesh(
     new THREE.RingGeometry(0.55, 0.72, 28),
     new THREE.MeshBasicMaterial({
@@ -831,14 +978,12 @@ function createCinemaCharacterInstance(
   talkRing.position.y = 0.03
   root.add(talkRing)
 
-  // 3D Popcorn Bucket & Kernel
   const { bucketGroup: popcornBucket, eatingKernel } = createDetailed3DPopcornBucket()
   popcornBucket.position.set(-0.28, 1.05, 0.26)
   popcornBucket.visible = config.accessory === 'popcorn'
   root.add(popcornBucket)
   root.add(eatingKernel)
 
-  // Flying 3D Popcorn Crumbs when eating popcorn
   const popcornCrumbs: { mesh: THREE.Mesh; vy: number; vx: number; vz: number; life: number }[] = []
   const crumbGeo = new THREE.DodecahedronGeometry(0.032, 0)
   const crumbMat = new THREE.MeshBasicMaterial({ color: 0xfef08a })
@@ -849,7 +994,6 @@ function createCinemaCharacterInstance(
     popcornCrumbs.push({ mesh: m, vy: 0, vx: 0, vz: 0, life: 0 })
   }
 
-  // Energy Aura
   let auraMesh: THREE.Mesh | null = null
   if (config.aura !== 'none') {
     const auraColorMap: Record<CinemaAuraStyle, number> = {
@@ -888,8 +1032,7 @@ function createCinemaCharacterInstance(
     isVrm: false,
   }
 
-  // Resolve which Real 3D Model URL to load (.GLB / .VRM)
-  const modelType: CinemaModelType = config.modelType || 'streetwear-rpm'
+  const modelType: CinemaModelType = config.modelType || 'anime-vrm'
   const presetModel = REAL_3D_MODELS.find((m) => m.id === modelType) || REAL_3D_MODELS[0]
   const targetUrl =
     modelType === 'custom-url' && config.customModelUrl?.trim()
@@ -898,18 +1041,21 @@ function createCinemaCharacterInstance(
 
   loadCachedGLTF(targetUrl)
     .then((gltf) => {
+      updateStatus(undefined)
       const vrm = gltf.userData?.vrm
       let clonedScene: THREE.Object3D
 
       if (vrm && vrm.scene) {
-        // VRM Anime Model
         clonedScene = SkeletonUtils.clone(vrm.scene)
         instance.isVrm = true
+        // VRM 0.x models face -Z by default; rotate if needed so all models face the same direction
+        if (targetUrl.includes('ChatVRM')) {
+          clonedScene.rotation.y = Math.PI
+        }
       } else {
         clonedScene = SkeletonUtils.clone(gltf.scene)
       }
 
-      // Normalize height to ~1.85m so any custom GLB/VRM fits the cinema chairs!
       const box = new THREE.Box3().setFromObject(clonedScene)
       const size = new THREE.Vector3()
       box.getSize(size)
@@ -918,7 +1064,6 @@ function createCinemaCharacterInstance(
         clonedScene.scale.setScalar(scale)
       }
 
-      // Tint Shirt / Outfit Top & Pants / Outfit Bottom materials with user's chosen colors!
       const shirtColor = new THREE.Color(config.shirtColor || '#f97316')
       const pantsColor = new THREE.Color(config.pantsColor || '#1d4ed8')
 
@@ -931,19 +1076,19 @@ function createCinemaCharacterInstance(
           if (
             matName.includes('top') ||
             matName.includes('shirt') ||
-            matName.includes('body') ||
+            matName.includes('onepiece') ||
             matName.includes('main') ||
             matName.includes('vanguardbodymat') ||
             matName.includes('highlimbs')
           ) {
-            if (m.color) m.color.lerp(shirtColor, 0.65)
+            if (m.color) m.color.lerp(shirtColor, 0.58)
           } else if (
             matName.includes('bottom') ||
             matName.includes('pants') ||
             matName.includes('joints') ||
             matName.includes('grey')
           ) {
-            if (m.color) m.color.lerp(pantsColor, 0.65)
+            if (m.color) m.color.lerp(pantsColor, 0.58)
           }
           return m
         }
@@ -957,10 +1102,14 @@ function createCinemaCharacterInstance(
 
       modelContainer.add(clonedScene)
 
-      // Extract Skeletal Bone Rig (Head, Spine, Left/Right Arm, ForeArm, Hand, UpperLeg, LowerLeg)
       instance.rig = extractBoneRig(clonedScene)
 
-      // Parent the 3D Popcorn Bucket to Left Hand bone and Eating Kernel to Right Hand bone if available!
+      // Relax T-pose arms down naturally for VRM models if no idle clip is active yet
+      if (instance.isVrm) {
+        if (instance.rig.leftUpperArm) instance.rig.leftUpperArm.rotation.z = 1.15
+        if (instance.rig.rightUpperArm) instance.rig.rightUpperArm.rotation.z = -1.15
+      }
+
       if (instance.rig.leftHand) {
         instance.rig.leftHand.add(popcornBucket)
         popcornBucket.position.set(0, 0.08, 0.12)
@@ -971,24 +1120,35 @@ function createCinemaCharacterInstance(
         eatingKernel.position.set(0, 0.05, 0.05)
       }
 
-      // Attach 3D Hair, Hats, Katana, Wings to the actual skeleton bones
       attachCosmeticsToRig(instance.rig, modelContainer, config)
 
-      // Set up AnimationMixer with native + retargeted Mixamo clips
       const mixer = new THREE.AnimationMixer(clonedScene)
       instance.mixer = mixer
 
-      const allClips = [...(gltf.animations || [])]
-      Object.values(sharedMocapClips).forEach((mc) => {
-        allClips.push(retargetClipForRoot(mc, clonedScene))
-      })
+      const registerClips = () => {
+        const allClips = [...(gltf.animations || [])]
+        Object.values(sharedMocapClips).forEach((mc) => {
+          const retargeted = retargetClipForRoot(mc, clonedScene)
+          if (retargeted.tracks.length > 0) {
+            allClips.push(retargeted)
+          }
+        })
+        allClips.forEach((clip) => {
+          const key = clip.name.toLowerCase()
+          if (!instance.actions[key]) {
+            instance.actions[key] = mixer.clipAction(clip)
+          }
+        })
+      }
 
-      allClips.forEach((clip) => {
-        const key = clip.name.toLowerCase()
-        instance.actions[key] = mixer.clipAction(clip)
-      })
+      registerClips()
+      mocapClipListeners.add(registerClips)
+      instance.cleanup = () => {
+        mocapClipListeners.delete(registerClips)
+      }
     })
     .catch((err) => {
+      updateStatus('Erro 3D')
       console.warn('3D Model fallback:', err)
     })
 
@@ -1033,18 +1193,15 @@ export function WatchTogetherStage({
   const [myEmote, setMyEmote] = useState<CinemaEmoteType>('none')
   const [cameraView, setCameraView] = useState<'free' | 'seat-pov' | 'screen-closeup'>('free')
   const [activeModal, setActiveModal] = useState<'wardrobe' | 'movies' | null>(null)
-  const [localScreenRect, setLocalScreenRect] = useState<{
-    left: number
-    top: number
-    width: number
-    height: number
-    visible: boolean
-  }>({ left: 0, top: 0, width: 0, height: 0, visible: false })
 
   const mountRef = useRef<HTMLDivElement | null>(null)
+  const css3dMountRef = useRef<HTMLDivElement | null>(null)
+  const screenDomRef = useRef<HTMLDivElement | null>(null)
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const htmlVideoRef = useRef<HTMLVideoElement | null>(null)
   const liveStreamVideoRef = useRef<HTMLVideoElement | null>(null)
+  const videoTextureRef = useRef<THREE.VideoTexture | null>(null)
+  const liveTextureRef = useRef<THREE.VideoTexture | null>(null)
   const isApplyingRemoteSyncRef = useRef(false)
 
   const myPosRef = useRef<{
@@ -1055,14 +1212,14 @@ export function WatchTogetherStage({
     seatIndex: number | null
   }>({
     x: 0,
-    y: 0,
-    z: 4.5,
+    y: 1.85,
+    z: 8.5,
     rotY: Math.PI,
     seatIndex: null,
   })
   const keysPressedRef = useRef<Record<string, boolean>>({})
   const cameraYawRef = useRef<number>(0)
-  const cameraPitchRef = useRef<number>(0.22)
+  const cameraPitchRef = useRef<number>(0.18)
   const isDraggingCamRef = useRef<boolean>(false)
   const lastMouseRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 })
 
@@ -1074,6 +1231,7 @@ export function WatchTogetherStage({
   const myEmoteRef = useRef(myEmote)
   const cameraViewRef = useRef(cameraView)
   const watchStateRef = useRef(watchState)
+  const liveScreenStreamRef = useRef(liveScreenStream)
   const currentUserRef = useRef(currentUser)
   const onBroadcastRef = useRef(onBroadcastCinemaState)
 
@@ -1102,6 +1260,9 @@ export function WatchTogetherStage({
     watchStateRef.current = watchState
   }, [watchState])
   useEffect(() => {
+    liveScreenStreamRef.current = liveScreenStream
+  }, [liveScreenStream])
+  useEffect(() => {
     currentUserRef.current = currentUser
   }, [currentUser])
   useEffect(() => {
@@ -1125,18 +1286,44 @@ export function WatchTogetherStage({
     })
   }, [currentUser, avatarConfig, myEmote])
 
+  // Bind live WebRTC screen share stream onto true 3D THREE.VideoTexture!
   useEffect(() => {
     const el = liveStreamVideoRef.current
-    if (!el || !liveScreenStream) return
+    if (!el || !liveScreenStream) {
+      liveTextureRef.current = null
+      return
+    }
     if (el.srcObject !== liveScreenStream) {
       el.srcObject = liveScreenStream
       el.play().catch(() => {})
     }
+    const vTex = new THREE.VideoTexture(el)
+    vTex.minFilter = THREE.LinearFilter
+    vTex.magFilter = THREE.LinearFilter
+    vTex.colorSpace = THREE.SRGBColorSpace
+    liveTextureRef.current = vTex
+
+    return () => {
+      vTex.dispose()
+      liveTextureRef.current = null
+    }
   }, [liveScreenStream])
 
+  // Bind HTML5 MP4/WebM video onto true 3D THREE.VideoTexture & sync play/pause/seek!
   useEffect(() => {
     const vid = htmlVideoRef.current
-    if (!vid || !watchState || watchState.provider !== 'mp4') return
+    if (!vid || !watchState || watchState.provider !== 'mp4') {
+      videoTextureRef.current = null
+      return
+    }
+
+    if (!videoTextureRef.current) {
+      const vTex = new THREE.VideoTexture(vid)
+      vTex.minFilter = THREE.LinearFilter
+      vTex.magFilter = THREE.LinearFilter
+      vTex.colorSpace = THREE.SRGBColorSpace
+      videoTextureRef.current = vTex
+    }
 
     isApplyingRemoteSyncRef.current = true
     const elapsedSinceUpdate = watchState.isPlaying
@@ -1166,6 +1353,7 @@ export function WatchTogetherStage({
     watchState?.provider,
   ])
 
+  // Sync YouTube Iframe play/pause + seek
   useEffect(() => {
     if (!watchState || watchState.provider !== 'youtube' || !iframeRef.current) return
     const win = iframeRef.current.contentWindow
@@ -1212,8 +1400,7 @@ export function WatchTogetherStage({
     if (cur.seatIndex !== null) {
       myPosRef.current = {
         ...cur,
-        y: 0,
-        z: cur.z + 1.1,
+        z: cur.z + 1.15,
         seatIndex: null,
       }
     } else {
@@ -1252,21 +1439,47 @@ export function WatchTogetherStage({
     }
   }
 
-  // Main 3D Theater Room Three.js Engine
+  // =========================================================================
+  // MAIN 3D IMAX MEGA-THEATER ENGINE (WebGLRenderer + CSS3DRenderer for Fixed 3D Screen!)
+  // =========================================================================
   useEffect(() => {
-    if (!mountRef.current) return
+    if (!mountRef.current || !css3dMountRef.current || !screenDomRef.current) return
     const container = mountRef.current
+    const cssContainer = css3dMountRef.current
+    const screenElement = screenDomRef.current
+
     let width = container.clientWidth || 960
     let height = container.clientHeight || 540
 
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color(0x07070c)
-    scene.fog = new THREE.FogExp2(0x07070c, 0.016)
+    scene.background = new THREE.Color(0x06060b)
+    scene.fog = new THREE.FogExp2(0x06060b, 0.011)
 
-    const camera = new THREE.PerspectiveCamera(52, width / height, 0.1, 100)
+    const cssScene = new THREE.Scene()
 
+    const camera = new THREE.PerspectiveCamera(54, width / height, 0.1, 140)
+
+    // 1. CSS3DRenderer renders the YouTube/Twitch Iframe with TRUE 3D Perspective Matrix at (0, 6.6, -15.6)!
+    // It NEVER slides or resizes like a 2D overlay — it stays physically anchored on the cinema wall!
+    const cssRenderer = new CSS3DRenderer()
+    cssRenderer.setSize(width, height)
+    cssRenderer.domElement.style.position = 'absolute'
+    cssRenderer.domElement.style.top = '0'
+    cssRenderer.domElement.style.left = '0'
+    cssRenderer.domElement.style.pointerEvents = 'none'
+    cssContainer.innerHTML = ''
+    cssContainer.appendChild(cssRenderer.domElement)
+
+    const cssScreenObject = new CSS3DObject(screenElement)
+    // 1280x720 DOM element scaled by 0.0165 => 21.12m wide x 11.88m tall in 3D world units!
+    cssScreenObject.scale.setScalar(0.0165)
+    cssScreenObject.position.set(0, 6.6, -15.58)
+    cssScene.add(cssScreenObject)
+
+    // 2. WebGLRenderer for the 3D Theater Architecture, 36 Seats, Movie Posters & GLTF/VRM Characters
     const renderer = new THREE.WebGLRenderer({
       antialias: false,
+      alpha: true,
       powerPreference: 'low-power',
     })
     renderer.setPixelRatio(1)
@@ -1274,92 +1487,149 @@ export function WatchTogetherStage({
     container.innerHTML = ''
     container.appendChild(renderer.domElement)
 
-    // Rich Theater Lighting for real GLTF PBR meshes
+    // Theater Lighting
     const hemiLight = new THREE.HemisphereLight(0xffffff, 0x2e1065, 1.35)
     scene.add(hemiLight)
 
-    const screenBounceLight = new THREE.PointLight(0x818cf8, 3.5, 30)
-    screenBounceLight.position.set(0, 4.5, -8.2)
+    const screenBounceLight = new THREE.PointLight(0x818cf8, 4.2, 38)
+    screenBounceLight.position.set(0, 6.2, -12.5)
     scene.add(screenBounceLight)
 
     const ceilingLight = new THREE.DirectionalLight(0xfff7ed, 1.45)
-    ceilingLight.position.set(4, 14, 8)
+    ceilingLight.position.set(5, 18, 10)
     scene.add(ceilingLight)
 
-    // 1. Cinema Red Carpet Floor & Tiered Row Platforms
+    // 3. Expanded Grand IMAX Auditorium Floor, Walls & Tiered Stadium Platforms
     const floor = new THREE.Mesh(
-      new THREE.PlaneGeometry(26, 28),
-      new THREE.MeshStandardMaterial({ color: 0x2a0810, roughness: 0.85 })
+      new THREE.PlaneGeometry(36, 40),
+      new THREE.MeshStandardMaterial({ color: 0x26070e, roughness: 0.85 })
     )
     floor.rotation.x = -Math.PI / 2
     scene.add(floor)
 
-    const stripGeo = new THREE.PlaneGeometry(0.18, 16)
+    // Side & Back Auditorium Walls
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x0d0e15, roughness: 0.9 })
+    const leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.6, 15, 36), wallMat)
+    leftWall.position.set(-15.5, 7.5, -2)
+    const rightWall = new THREE.Mesh(new THREE.BoxGeometry(0.6, 15, 36), wallMat)
+    rightWall.position.set(15.5, 7.5, -2)
+    const backWall = new THREE.Mesh(new THREE.BoxGeometry(32, 15, 0.6), wallMat)
+    backWall.position.set(0, 7.5, 14)
+    scene.add(leftWall, rightWall, backWall)
+
+    // 6 Glowing Framed Movie Posters along Left & Right Cinema Walls!
+    CATALOG_MOVIES.forEach((m, idx) => {
+      const isLeft = idx < 3
+      const slot = idx % 3
+      const zPos = -8.5 + slot * 6.5
+      const xPos = isLeft ? -15.1 : 15.1
+
+      const posterGroup = new THREE.Group()
+      const frameMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(0.18, 4.2, 2.8),
+        new THREE.MeshStandardMaterial({
+          color: 0xf59e0b,
+          emissive: 0x78350f,
+          emissiveIntensity: 0.35,
+          roughness: 0.3,
+        })
+      )
+      posterGroup.add(frameMesh)
+
+      const posterTex = createMoviePosterTexture(
+        m.posterTitle,
+        m.posterSub,
+        m.posterBg,
+        m.badgeColor
+      )
+      const posterPlane = new THREE.Mesh(
+        new THREE.PlaneGeometry(2.55, 3.9),
+        new THREE.MeshBasicMaterial({ map: posterTex })
+      )
+      posterPlane.rotation.y = isLeft ? Math.PI / 2 : -Math.PI / 2
+      posterPlane.position.x = isLeft ? 0.11 : -0.11
+      posterGroup.add(posterPlane)
+
+      posterGroup.position.set(xPos, 5.2, zPos)
+      scene.add(posterGroup)
+    })
+
+    // Glowing LED aisle floor strips + illuminated steps
+    const stripGeo = new THREE.PlaneGeometry(0.22, 24)
     const stripMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b })
     const leftStrip = new THREE.Mesh(stripGeo, stripMat)
     leftStrip.rotation.x = -Math.PI / 2
-    leftStrip.position.set(-8.2, 0.02, -1)
+    leftStrip.position.set(-10.8, 0.03, -1)
     const rightStrip = new THREE.Mesh(stripGeo, stripMat)
     rightStrip.rotation.x = -Math.PI / 2
-    rightStrip.position.set(8.2, 0.02, -1)
+    rightStrip.position.set(10.8, 0.03, -1)
     scene.add(leftStrip, rightStrip)
 
-    const vipPlatform = new THREE.Mesh(
-      new THREE.BoxGeometry(18, 0.6, 3.2),
-      new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.8 })
-    )
-    vipPlatform.position.set(0, 0.3, 1.2)
-    scene.add(vipPlatform)
+    // 4 Tiered Stadium Platforms (Rows 2, 3, 4 + Rear Lobby Deck)
+    const tierMat = new THREE.MeshStandardMaterial({ color: 0x16171d, roughness: 0.85 })
+    const tier2 = new THREE.Mesh(new THREE.BoxGeometry(24, 0.55, 16.5), tierMat)
+    tier2.position.set(0, 0.275, 4.0)
+    const tier3 = new THREE.Mesh(new THREE.BoxGeometry(24, 0.6, 12.6), tierMat)
+    tier3.position.set(0, 0.85, 5.9)
+    const tier4 = new THREE.Mesh(new THREE.BoxGeometry(24, 0.6, 8.8), tierMat)
+    tier4.position.set(0, 1.45, 7.8)
+    scene.add(tier2, tier3, tier4)
 
-    // 2. Giant Cinema Stage & Glowing IMAX Frame at Z = -10.8
+    // 4. Giant IMAX Stage & Fixed 3D Movie Screen at Z = -15.6
     const stageBase = new THREE.Mesh(
-      new THREE.BoxGeometry(20, 0.9, 3.2),
+      new THREE.BoxGeometry(26, 1.1, 3.8),
       new THREE.MeshStandardMaterial({ color: 0x111214, roughness: 0.7 })
     )
-    stageBase.position.set(0, 0.45, -10.2)
+    stageBase.position.set(0, 0.55, -14.8)
     scene.add(stageBase)
 
     const screenBorder = new THREE.Mesh(
-      new THREE.BoxGeometry(15.2, 8.6, 0.35),
+      new THREE.BoxGeometry(22.2, 12.6, 0.45),
       new THREE.MeshStandardMaterial({ color: 0x1e1b4b, roughness: 0.4 })
     )
-    screenBorder.position.set(0, 5.1, -11.0)
+    screenBorder.position.set(0, 6.6, -15.85)
     scene.add(screenBorder)
 
-    const screenSurface = new THREE.Mesh(
-      new THREE.PlaneGeometry(14.4, 8.1),
-      new THREE.MeshBasicMaterial({ color: 0x050507 })
+    // Idle standby texture on the 3D screen when no video is playing
+    const standbyTex = createMoviePosterTexture(
+      'CINE OS SECOS',
+      'CLIQUE EM ESCOLHER FILME PARA INICIAR',
+      '#1e1b4b',
+      '#f59e0b'
     )
-    screenSurface.position.set(0, 5.1, -10.8)
+    const screenMat = new THREE.MeshBasicMaterial({ map: standbyTex })
+    const screenSurface = new THREE.Mesh(new THREE.PlaneGeometry(21.12, 11.88), screenMat)
+    screenSurface.position.set(0, 6.6, -15.55)
     scene.add(screenSurface)
 
+    // Red Velvet Side Curtains & Cinema Speakers
     const curtainMat = new THREE.MeshStandardMaterial({ color: 0x7f1d1d, roughness: 0.75 })
-    const leftCurtain = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.1, 9.5, 16), curtainMat)
-    leftCurtain.position.set(-8.4, 4.75, -10.6)
-    const rightCurtain = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 1.1, 9.5, 16), curtainMat)
-    rightCurtain.position.set(8.4, 4.75, -10.6)
+    const leftCurtain = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.3, 13.2, 16), curtainMat)
+    leftCurtain.position.set(-12.2, 6.6, -15.3)
+    const rightCurtain = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.3, 13.2, 16), curtainMat)
+    rightCurtain.position.set(12.2, 6.6, -15.3)
     scene.add(leftCurtain, rightCurtain)
 
-    // 3. Build 14 Red Plush Cinema Armchairs with Cupholders
+    // 5. Build 36 Red Plush Cinema Armchairs across 4 Stadium Rows
     const seatCushionMat = new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.6 })
     const seatArmMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.5 })
     CINEMA_SEATS.forEach((s) => {
       const chair = new THREE.Group()
-      const baseHeight = s.row === 2 ? 0.6 : 0
-      const cushion = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.35, 1.2), seatCushionMat)
+      const baseHeight = s.y - 0.1
+      const cushion = new THREE.Mesh(new THREE.BoxGeometry(1.38, 0.35, 1.2), seatCushionMat)
       cushion.position.set(0, baseHeight + 0.35, 0)
-      const backrest = new THREE.Mesh(new THREE.BoxGeometry(1.35, 1.25, 0.28), seatCushionMat)
-      backrest.position.set(0, baseHeight + 0.95, 0.48)
-      const lArm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.55, 1.2), seatArmMat)
-      lArm.position.set(-0.68, baseHeight + 0.55, 0)
-      const rArm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.55, 1.2), seatArmMat)
-      rArm.position.set(0.68, baseHeight + 0.55, 0)
+      const backrest = new THREE.Mesh(new THREE.BoxGeometry(1.38, 1.28, 0.28), seatCushionMat)
+      backrest.position.set(0, baseHeight + 0.96, 0.48)
+      const lArm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.56, 1.2), seatArmMat)
+      lArm.position.set(-0.68, baseHeight + 0.56, 0)
+      const rArm = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.56, 1.2), seatArmMat)
+      rArm.position.set(0.68, baseHeight + 0.56, 0)
       chair.add(cushion, backrest, lArm, rArm)
       chair.position.set(s.x, 0, s.z)
       scene.add(chair)
     })
 
-    // 4. Manage Dynamic Real GLTF/VRM 3D Player Avatars in the Theater
+    // 6. Dynamic Real GLTF/VRM 3D Player Characters
     const characterInstances = new Map<string, CinemaCharacterInstance>()
 
     const onResize = () => {
@@ -1369,6 +1639,7 @@ export function WatchTogetherStage({
       camera.aspect = width / height
       camera.updateProjectionMatrix()
       renderer.setSize(width, height)
+      cssRenderer.setSize(width, height)
     }
     window.addEventListener('resize', onResize)
 
@@ -1376,10 +1647,13 @@ export function WatchTogetherStage({
     let lastRender = 0
     let lastNetworkBroadcast = 0
 
-    const topLeftWorld = new THREE.Vector3(-7.2, 5.1 + 4.05, -10.8)
-    const bottomRightWorld = new THREE.Vector3(7.2, 5.1 - 4.05, -10.8)
-    const screenNormal = new THREE.Vector3(0, 0, 1)
-    const camToScreen = new THREE.Vector3()
+    // Floor height helper for stadium tiers
+    const getFloorHeightAtZ = (z: number) => {
+      if (z >= 3.4) return 1.75
+      if (z >= -0.4) return 1.15
+      if (z >= -4.2) return 0.55
+      return 0
+    }
 
     const animate = (now: number) => {
       frameId = requestAnimationFrame(animate)
@@ -1400,7 +1674,7 @@ export function WatchTogetherStage({
       const myPos = myPosRef.current
       let moved = false
       if (moveX !== 0 || moveZ !== 0) {
-        const speed = 5.2
+        const speed = 5.8
         const len = Math.hypot(moveX, moveZ)
         const dx = (moveX / len) * speed * dt
         const dz = (moveZ / len) * speed * dt
@@ -1410,9 +1684,9 @@ export function WatchTogetherStage({
         const worldDx = dx * cos + dz * sin
         const worldDz = dz * cos - dx * sin
 
-        myPos.x = Math.max(-10.5, Math.min(10.5, myPos.x + worldDx))
-        myPos.z = Math.max(-7.8, Math.min(8.5, myPos.z + worldDz))
-        myPos.y = 0
+        myPos.x = Math.max(-13.8, Math.min(13.8, myPos.x + worldDx))
+        myPos.z = Math.max(-12.2, Math.min(12.2, myPos.z + worldDz))
+        myPos.y = getFloorHeightAtZ(myPos.z)
         myPos.seatIndex = null
         myPos.rotY = Math.atan2(worldDx, worldDz)
         moved = true
@@ -1434,16 +1708,47 @@ export function WatchTogetherStage({
         })
       }
 
-      // 2. Dim lights when movie is playing
+      // 2. Update Fixed 3D Movie Screen Material (WebGL VideoTexture vs CSS3D 3D-Transformed Iframe)
       const ws = watchStateRef.current
-      const dimmed = ws?.lightsDimmed ?? Boolean(ws?.active && ws?.isPlaying)
+      const hasLiveStream = Boolean(liveScreenStreamRef.current && liveTextureRef.current)
+      const isMp4Video = Boolean(ws?.active && ws.provider === 'mp4' && videoTextureRef.current)
+      const isIframeVideo = Boolean(ws?.active && ws.provider !== 'mp4' && !hasLiveStream)
+
+      if (hasLiveStream && liveTextureRef.current) {
+        screenSurface.visible = true
+        if (screenMat.map !== liveTextureRef.current) {
+          screenMat.map = liveTextureRef.current
+          screenMat.color.setHex(0xffffff)
+          screenMat.needsUpdate = true
+        }
+      } else if (isMp4Video && videoTextureRef.current) {
+        screenSurface.visible = true
+        if (screenMat.map !== videoTextureRef.current) {
+          screenMat.map = videoTextureRef.current
+          screenMat.color.setHex(0xffffff)
+          screenMat.needsUpdate = true
+        }
+      } else if (isIframeVideo) {
+        // Hide solid WebGL plane so the 3D-perspective CSS3DObject iframe at the exact same 3D coordinates shines through!
+        screenSurface.visible = false
+      } else {
+        screenSurface.visible = true
+        if (screenMat.map !== standbyTex) {
+          screenMat.map = standbyTex
+          screenMat.color.setHex(0xffffff)
+          screenMat.needsUpdate = true
+        }
+      }
+
+      // 3. Dim theater lights when movie is playing
+      const dimmed = ws?.lightsDimmed ?? Boolean((ws?.active && ws?.isPlaying) || hasLiveStream)
       hemiLight.intensity = THREE.MathUtils.lerp(hemiLight.intensity, dimmed ? 0.55 : 1.35, 0.08)
       ceilingLight.intensity = THREE.MathUtils.lerp(ceilingLight.intensity, dimmed ? 0.35 : 1.45, 0.08)
       screenBounceLight.intensity = dimmed
-        ? 4.0 + Math.sin(timeSec * 6) * 0.5
-        : 2.0
+        ? 4.6 + Math.sin(timeSec * 6) * 0.5
+        : 2.2
 
-      // 3. Sync all room peers into Real GLTF/VRM 3D Characters
+      // 4. Sync all room peers into Real GLTF/VRM 3D Characters
       const peers = roomPeersRef.current
       const remoteStates = cinemaPlayersRef.current
       const activeIds = new Set<string>()
@@ -1460,6 +1765,7 @@ export function WatchTogetherStage({
         let charInst = characterInstances.get(peer.id)
         if (!charInst || charInst.configSignature !== sig) {
           if (charInst) {
+            charInst.cleanup?.()
             scene.remove(charInst.root)
           }
           charInst = createCinemaCharacterInstance(peer, cfg)
@@ -1467,7 +1773,7 @@ export function WatchTogetherStage({
           characterInstances.set(peer.id, charInst)
         }
 
-        const defaultSeat = CINEMA_SEATS[idx % CINEMA_SEATS.length]
+        const defaultSeat = CINEMA_SEATS[(idx + 10) % CINEMA_SEATS.length]
         const targetX = isMe ? myPos.x : (remote?.x ?? defaultSeat.x)
         const targetY = isMe ? myPos.y : (remote?.y ?? defaultSeat.y)
         const targetZ = isMe ? myPos.z : (remote?.z ?? defaultSeat.z)
@@ -1486,7 +1792,6 @@ export function WatchTogetherStage({
         charInst.root.position.z = THREE.MathUtils.lerp(charInst.root.position.z, targetZ, 0.25)
         charInst.root.rotation.y = targetRotY
 
-        // Advance Skeletal AnimationMixer (Motion-Capture Walk, Run, Dance, Idle)
         if (charInst.mixer) {
           if (emote === 'dance') {
             playCharacterClip(charInst, ['sambadance', 'dance', 'walkjump'])
@@ -1504,10 +1809,8 @@ export function WatchTogetherStage({
           charInst.mixer.update(dt)
         }
 
-        // Apply Real Skeletal Bone Overrides after mixer update (Seated posture, Eating Popcorn hand-to-mouth, Speaking nod)
         const rig = charInst.rig
 
-        // Seated posture override on UpperLeg & LowerLeg bones
         if (seatIdx !== null && !charInst.actions['sitting']) {
           if (rig.leftUpperLeg) rig.leftUpperLeg.rotation.x = -Math.PI / 2.15
           if (rig.rightUpperLeg) rig.rightUpperLeg.rotation.x = -Math.PI / 2.15
@@ -1518,14 +1821,10 @@ export function WatchTogetherStage({
           charInst.modelContainer.position.y = 0
         }
 
-        // REAL 3D POPCORN EATING ANIMATION:
-        // Left arm holds the striped 3D Popcorn Bucket in front of chest,
-        // Right arm reaches into the bucket, grabs a 3D buttered popcorn kernel, lifts it to the mouth, and chews with crumbs flying!
         if (emote === 'popcorn') {
           charInst.popcornBucket.visible = true
           charInst.eatingKernel.visible = true
 
-          // Cycle 0 -> 1: 0..0.45 reach into bucket, 0.45..0.85 lift to mouth & chew
           const eatPhase = (timeSec * 1.65) % 1
           const liftToMouth = Math.sin(eatPhase * Math.PI)
 
@@ -1546,11 +1845,9 @@ export function WatchTogetherStage({
             rig.rightLowerArm.rotation.set(-0.7 - liftToMouth * 1.15, 0, 0)
           }
           if (rig.head && eatPhase > 0.4 && eatPhase < 0.75) {
-            // Chewing head motion!
             rig.head.rotation.x = Math.sin(timeSec * 28) * 0.14
           }
 
-          // Animate flying popcorn crumbs near the mouth!
           charInst.popcornCrumbs.forEach((c, cIdx) => {
             if (eatPhase > 0.45 && eatPhase < 0.65 && c.life <= 0) {
               c.mesh.visible = true
@@ -1581,7 +1878,6 @@ export function WatchTogetherStage({
             c.life = 0
           })
 
-          // Wave / Cheer bone overrides when clip doesn't have dedicated arm wave
           if (emote === 'wave' && rig.rightUpperArm) {
             rig.rightUpperArm.rotation.z = -2.2 + Math.sin(timeSec * 14) * 0.45
           } else if (emote === 'cheer' && rig.leftUpperArm && rig.rightUpperArm) {
@@ -1590,7 +1886,6 @@ export function WatchTogetherStage({
           }
         }
 
-        // Speaking indicator ring + head talk animation
         const talking = isMe
           ? isSelfSpeakingRef.current
           : Boolean(speakingPeersRef.current[peer.id])
@@ -1600,7 +1895,6 @@ export function WatchTogetherStage({
           rig.head.rotation.x += Math.sin(timeSec * 22) * 0.09
         }
 
-        // Aura pulse
         if (charInst.auraMesh) {
           charInst.auraMesh.rotation.y += 0.08
           const s = 1 + Math.sin(timeSec * 10) * 0.08
@@ -1608,73 +1902,40 @@ export function WatchTogetherStage({
         }
       })
 
-      // Remove disconnected peers
       characterInstances.forEach((inst, id) => {
         if (!activeIds.has(id)) {
+          inst.cleanup?.()
           scene.remove(inst.root)
           characterInstances.delete(id)
         }
       })
 
-      // 4. Camera Modes
+      // 5. Camera Modes:
+      // - 'screen-closeup' ("🖥️ Focar Telão"): Locks camera directly in front of the 3D screen!
+      // - 'seat-pov' ("👀 Poltrona"): First-person view from the player's seat looking at the 3D screen.
+      // - 'free' ("🎮 Jogo 3D"): Third-person game follow camera where the 3D screen stays fixed on the wall!
       const viewMode = cameraViewRef.current
       if (viewMode === 'screen-closeup') {
-        camera.position.lerp(new THREE.Vector3(0, 5.1, -0.8), 0.15)
-        camera.lookAt(0, 5.1, -10.8)
+        camera.position.lerp(new THREE.Vector3(0, 6.6, -2.5), 0.18)
+        camera.lookAt(0, 6.6, -15.6)
       } else if (viewMode === 'seat-pov') {
-        const targetCam = new THREE.Vector3(myPos.x, myPos.y + 1.85, myPos.z - 0.18)
+        const targetCam = new THREE.Vector3(myPos.x, myPos.y + 1.85, myPos.z - 0.2)
         camera.position.lerp(targetCam, 0.2)
-        camera.lookAt(0, 4.9, -10.8)
+        camera.lookAt(0, 6.4, -15.6)
       } else {
-        const dist = 5.4
+        const dist = 5.6
         const camX = myPos.x + Math.sin(cameraYawRef.current) * dist
         const camZ = myPos.z + Math.cos(cameraYawRef.current) * dist
-        const camY = Math.max(1.2, myPos.y + 2.45 + cameraPitchRef.current * 3.0)
+        const camY = Math.max(1.2, myPos.y + 2.5 + cameraPitchRef.current * 3.2)
         camera.position.lerp(new THREE.Vector3(camX, camY, camZ), 0.22)
-        camera.lookAt(myPos.x * 0.35, 3.6, -10.8)
-      }
 
-      camera.updateMatrixWorld()
-
-      // 5. Project 3D Movie Screen bounds to 2D overlay coordinates
-      camToScreen.set(0, 5.1, -10.8).sub(camera.position).normalize()
-      const facingScreen = camToScreen.dot(screenNormal) < -0.15
-
-      if (facingScreen) {
-        const tl = topLeftWorld.clone().project(camera)
-        const br = bottomRightWorld.clone().project(camera)
-
-        const leftPx = ((tl.x + 1) / 2) * width
-        const rightPx = ((br.x + 1) / 2) * width
-        const topPx = ((-tl.y + 1) / 2) * height
-        const bottomPx = ((-br.y + 1) / 2) * height
-
-        const wPx = Math.max(0, rightPx - leftPx)
-        const hPx = Math.max(0, bottomPx - topPx)
-
-        setLocalScreenRect((prev) => {
-          if (
-            Math.abs(prev.left - leftPx) < 1.5 &&
-            Math.abs(prev.top - topPx) < 1.5 &&
-            Math.abs(prev.width - wPx) < 1.5 &&
-            Math.abs(prev.height - hPx) < 1.5 &&
-            prev.visible
-          ) {
-            return prev
-          }
-          return {
-            left: leftPx,
-            top: topPx,
-            width: wPx,
-            height: hPx,
-            visible: wPx > 40 && hPx > 25,
-          }
-        })
-      } else {
-        setLocalScreenRect((prev) => (prev.visible ? { ...prev, visible: false } : prev))
+        const lookTargetX = myPos.x - Math.sin(cameraYawRef.current) * 6
+        const lookTargetZ = myPos.z - Math.cos(cameraYawRef.current) * 6
+        camera.lookAt(lookTargetX, myPos.y + 2.1, lookTargetZ)
       }
 
       renderer.render(scene, camera)
+      cssRenderer.render(cssScene, camera)
     }
 
     frameId = requestAnimationFrame(animate)
@@ -1682,6 +1943,7 @@ export function WatchTogetherStage({
     return () => {
       window.removeEventListener('resize', onResize)
       cancelAnimationFrame(frameId)
+      characterInstances.forEach((inst) => inst.cleanup?.())
       renderer.dispose()
     }
   }, [])
@@ -1789,13 +2051,31 @@ export function WatchTogetherStage({
     })
   }
 
+  const isIframeActive = Boolean(
+    watchState?.active && watchState.provider !== 'mp4' && !liveScreenStream
+  )
+
   return (
-    <div className="relative flex flex-1 flex-col overflow-hidden rounded-xl border border-[#232428] bg-[#07070c] select-none">
+    <div className="relative flex flex-1 flex-col overflow-hidden rounded-xl border border-[#232428] bg-[#06060b] select-none">
+      {/* Hidden HTML5 Video Elements feeding the True 3D WebGL THREE.VideoTexture on the Cinema Wall! */}
+      <video
+        ref={htmlVideoRef}
+        src={watchState?.provider === 'mp4' ? watchState.embedUrl : undefined}
+        crossOrigin="anonymous"
+        playsInline
+        className="pointer-events-none fixed -top-[9999px] -left-[9999px] h-1 w-1 opacity-0"
+      />
+      <video
+        ref={liveStreamVideoRef}
+        playsInline
+        className="pointer-events-none fixed -top-[9999px] -left-[9999px] h-1 w-1 opacity-0"
+      />
+
       {/* TOP CINEMA 3D GAME BAR */}
       <div className="z-20 flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-[#14151a]/95 px-3.5 py-2">
         <div className="flex items-center gap-2">
           <span className="rounded-md bg-gradient-to-r from-amber-500 to-red-600 px-2 py-0.5 text-[11px] font-black text-white uppercase shadow">
-            🍿 Cinema 3D • Os Secos
+            🍿 IMAX 3D • 36 Poltronas
           </span>
           {watchState?.active ? (
             <span className="truncate text-xs font-bold text-amber-300">
@@ -1806,12 +2086,13 @@ export function WatchTogetherStage({
             </span>
           ) : liveScreenStream ? (
             <span className="truncate text-xs font-bold text-emerald-400">
-              📡 Telão transmitindo ao vivo: {liveScreenStreamerName}
+              📡 Telão 3D ao vivo: {liveScreenStreamerName}
             </span>
           ) : (
             <span className="text-xs text-zinc-400">
               Ande com <strong className="text-white">W A S D</strong> • Aperte{' '}
-              <strong className="text-amber-300">E</strong> para sentar na poltrona
+              <strong className="text-amber-300">E</strong> para sentar • Arraste o mouse para
+              olhar
             </span>
           )}
         </div>
@@ -1822,7 +2103,7 @@ export function WatchTogetherStage({
             onClick={() => setActiveModal((m) => (m === 'movies' ? null : 'movies'))}
             className="cursor-pointer rounded-lg bg-[#5865f2] px-3 py-1.5 text-xs font-extrabold text-white shadow hover:bg-[#4752c4]"
           >
-            🎬 Escolher Filme / Colar Link
+            🎬 Escolher Filme / Link
           </button>
 
           <button
@@ -1830,7 +2111,7 @@ export function WatchTogetherStage({
             onClick={() => setActiveModal((m) => (m === 'wardrobe' ? null : 'wardrobe'))}
             className="cursor-pointer rounded-lg bg-amber-500/20 px-3 py-1.5 text-xs font-extrabold text-amber-300 ring-1 ring-amber-500/40 hover:bg-amber-500/30"
           >
-            👘 Modelos 3D Reais, Anime & Roupas
+            👘 Personagens 3D & Roupas
           </button>
 
           <button
@@ -1841,12 +2122,25 @@ export function WatchTogetherStage({
             💺 Sentar / Levantar (E)
           </button>
 
+          <button
+            type="button"
+            onClick={() =>
+              setCameraView((v) => (v === 'screen-closeup' ? 'free' : 'screen-closeup'))
+            }
+            className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-extrabold transition shadow ${
+              cameraView === 'screen-closeup'
+                ? 'bg-emerald-600 text-white ring-2 ring-emerald-300'
+                : 'bg-[#2b2d31] text-emerald-400 hover:bg-[#35373c]'
+            }`}
+          >
+            {cameraView === 'screen-closeup' ? '🔙 Voltar pro Jogo 3D' : '🖥️ Focar no Telão'}
+          </button>
+
           <div className="flex items-center rounded-lg bg-[#1e1f22] p-0.5 text-[11px]">
             {(
               [
-                { id: 'free', label: '🎮 Jogo 3D' },
-                { id: 'seat-pov', label: '👀 Poltrona' },
-                { id: 'screen-closeup', label: '🖥️ Focar Telão' },
+                { id: 'free', label: '🎮 3ª Pessoa' },
+                { id: 'seat-pov', label: '👀 Visão Poltrona' },
               ] as const
             ).map((cam) => (
               <button
@@ -1881,7 +2175,7 @@ export function WatchTogetherStage({
           lastMouseRef.current = { x: e.clientX, y: e.clientY }
           cameraYawRef.current -= dx * 0.006
           cameraPitchRef.current = Math.max(
-            -0.3,
+            -0.35,
             Math.min(0.65, cameraPitchRef.current + dy * 0.004)
           )
         }}
@@ -1892,83 +2186,39 @@ export function WatchTogetherStage({
           isDraggingCamRef.current = false
         }}
       >
-        <div ref={mountRef} className="h-full w-full cursor-grab active:cursor-grabbing" />
+        {/* Layer 1: CSS3DRenderer (Renders YouTube/Twitch Iframe in TRUE 3D Perspective on the Cinema Wall!) */}
+        <div ref={css3dMountRef} className="pointer-events-none absolute inset-0 z-0" />
 
-        {/* PROJECTED GIANT MOVIE SCREEN OVERLAY */}
-        {localScreenRect.visible && (
-          <div
-            style={{
-              left: `${localScreenRect.left}px`,
-              top: `${localScreenRect.top}px`,
-              width: `${localScreenRect.width}px`,
-              height: `${localScreenRect.height}px`,
-            }}
-            className="pointer-events-auto absolute z-10 overflow-hidden rounded border border-indigo-500/40 bg-black shadow-[0_0_50px_rgba(99,102,241,0.45)]"
-          >
-            {liveScreenStream ? (
-              <video
-                ref={liveStreamVideoRef}
-                autoPlay
-                playsInline
-                className="h-full w-full bg-black object-contain"
-              />
-            ) : watchState?.active ? (
-              watchState.provider === 'mp4' ? (
-                <video
-                  ref={htmlVideoRef}
-                  src={watchState.embedUrl}
-                  controls
-                  playsInline
-                  onPlay={() => {
-                    if (!isApplyingRemoteSyncRef.current && !watchState.isPlaying) {
-                      handleGlobalPlayPause(true)
-                    }
-                  }}
-                  onPause={() => {
-                    if (!isApplyingRemoteSyncRef.current && watchState.isPlaying) {
-                      handleGlobalPlayPause(false)
-                    }
-                  }}
-                  onSeeked={(e) => {
-                    if (isApplyingRemoteSyncRef.current || !currentUser) return
-                    const vid = e.currentTarget
-                    if (Math.abs(vid.currentTime - (watchState.currentTime || 0)) > 2.0) {
-                      onUpdateWatchState({
-                        ...watchState,
-                        hostId: currentUser.id,
-                        hostName: currentUser.username,
-                        currentTime: vid.currentTime,
-                        updatedAt: Date.now(),
-                      })
-                    }
-                  }}
-                  className="h-full w-full bg-black object-contain"
-                />
-              ) : (
-                <iframe
-                  ref={iframeRef}
-                  src={watchState.embedUrl}
-                  className="h-full w-full border-0"
-                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
-                  allowFullScreen
-                />
-              )
-            ) : (
-              <div
-                onClick={() => setActiveModal('movies')}
-                className="flex h-full w-full cursor-pointer flex-col items-center justify-center bg-gradient-to-b from-[#131424] to-[#07070c] p-4 text-center hover:brightness-110"
-              >
-                <div className="text-2xl font-black tracking-wider text-amber-400">
-                  🍿 TELÃO DO CINEMA 3D
-                </div>
-                <p className="mt-1 max-w-md text-xs text-zinc-300">
-                  Clique aqui ou em <strong>&quot;🎬 Escolher Filme&quot;</strong> para colocar um
-                  filme sincronizado para todo mundo na sala!
-                </p>
-              </div>
-            )}
-          </div>
-        )}
+        {/* DOM Element managed by CSS3DObject at (0, 6.6, -15.58) */}
+        <div
+          ref={screenDomRef}
+          style={{
+            width: '1280px',
+            height: '720px',
+            display: isIframeActive ? 'block' : 'none',
+            pointerEvents: cameraView === 'screen-closeup' ? 'auto' : 'none',
+          }}
+          className="overflow-hidden bg-black"
+        >
+          {isIframeActive && watchState && (
+            <iframe
+              ref={iframeRef}
+              src={watchState.embedUrl}
+              className="h-full w-full border-0"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
+              allowFullScreen
+            />
+          )}
+        </div>
+
+        {/* Layer 2: WebGLRenderer (3D Cinema Room, Posters, 36 Seats, Characters & WebGL VideoTexture Screen) */}
+        <div
+          ref={mountRef}
+          style={{
+            pointerEvents: cameraView === 'screen-closeup' && isIframeActive ? 'none' : 'auto',
+          }}
+          className="relative z-10 h-full w-full cursor-grab active:cursor-grabbing"
+        />
 
         {/* BOTTOM FLOATING GAME HUD */}
         <div className="pointer-events-auto absolute right-4 bottom-3 left-4 z-20 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-[#111214]/90 px-3.5 py-2 shadow-2xl">
@@ -2056,12 +2306,11 @@ export function WatchTogetherStage({
               <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
                 <div>
                   <h3 className="text-base font-extrabold text-white">
-                    👘 Modelos 3D Reais (.GLB / .VRM Anime), Roupas & Acessórios
+                    👘 Modelos 3D Reais (.VRM Anime / .GLB), Roupas & Acessórios
                   </h3>
                   <p className="text-xs text-zinc-400">
-                    Escolha um modelo 3D articulado real (ReadyPlayerMe, VRoid Anime VRM, Mixamo) ou
-                    cole o link de qualquer modelo <code className="text-amber-300">.vrm</code> /{' '}
-                    <code className="text-amber-300">.glb</code>!
+                    Cada personagem abaixo usa um modelo 3D diferente (Anime VRM, Lutador, Garota
+                    Mixamo, Soldado, Mecha)!
                   </p>
                 </div>
                 <button
@@ -2077,11 +2326,11 @@ export function WatchTogetherStage({
                 {/* 1. Real Rigged 3D Base Models */}
                 <div>
                   <label className="mb-2 block text-xs font-extrabold text-emerald-400 uppercase">
-                    🧍 1. Escolha o Corpo / Modelo 3D Real Articulado (GLTF / VRM)
+                    🧍 1. Escolha o Corpo / Modelo 3D Real Articulado (7 Modelos Diferentes)
                   </label>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
                     {REAL_3D_MODELS.map((m) => {
-                      const active = (avatarConfig.modelType || 'streetwear-rpm') === m.id
+                      const active = (avatarConfig.modelType || 'anime-vrm') === m.id
                       return (
                         <button
                           key={m.id}
@@ -2106,15 +2355,15 @@ export function WatchTogetherStage({
                   </div>
                 </div>
 
-                {/* Custom VRM / GLB URL Input (VRoid Hub, ReadyPlayerMe, Sketchfab, etc.) */}
+                {/* Custom VRM / GLB URL Input */}
                 <div className="rounded-xl border border-indigo-500/30 bg-[#232428] p-3.5">
                   <label className="mb-1 block text-xs font-extrabold text-indigo-300">
                     🌐 Usar Qualquer Modelo .VRM (Anime) ou .GLB da Internet (Opcional)
                   </label>
                   <p className="mb-2 text-[11px] text-zinc-400">
                     Tem um link direto de avatar <code className="text-white">.vrm</code> (VRoid) ou{' '}
-                    <code className="text-white">.glb</code> (ReadyPlayerMe)? Cole abaixo para
-                    carregar seu próprio modelo 3D na sala:
+                    <code className="text-white">.glb</code>? Cole abaixo para carregar seu próprio
+                    modelo 3D na sala:
                   </p>
                   <div className="flex gap-2">
                     <input
@@ -2122,7 +2371,7 @@ export function WatchTogetherStage({
                       value={avatarConfig.customModelUrl || ''}
                       onChange={(e) =>
                         updateMyAvatar({
-                          modelType: e.target.value.trim() ? 'custom-url' : 'streetwear-rpm',
+                          modelType: e.target.value.trim() ? 'custom-url' : 'anime-vrm',
                           customModelUrl: e.target.value,
                         })
                       }
@@ -2133,7 +2382,7 @@ export function WatchTogetherStage({
                       <button
                         type="button"
                         onClick={() =>
-                          updateMyAvatar({ modelType: 'streetwear-rpm', customModelUrl: '' })
+                          updateMyAvatar({ modelType: 'anime-vrm', customModelUrl: '' })
                         }
                         className="cursor-pointer rounded-lg bg-[#da373c] px-3 py-1.5 text-xs font-bold text-white"
                       >
@@ -2179,7 +2428,7 @@ export function WatchTogetherStage({
                 <div className="grid grid-cols-2 gap-4 rounded-xl bg-[#232428] p-3.5">
                   <div>
                     <label className="mb-1 block text-xs font-bold text-zinc-300">
-                      👕 Cor da Jaqueta / Camisa 3D
+                      👕 Cor da Roupa Superior 3D
                     </label>
                     <div className="flex items-center gap-2">
                       <input
@@ -2196,7 +2445,7 @@ export function WatchTogetherStage({
 
                   <div>
                     <label className="mb-1 block text-xs font-bold text-zinc-300">
-                      👖 Cor da Calça / Traje Inferior 3D
+                      👖 Cor da Calça / Saia 3D
                     </label>
                     <div className="flex items-center gap-2">
                       <input
@@ -2316,7 +2565,7 @@ export function WatchTogetherStage({
               <div className="flex items-center justify-between border-b border-white/10 px-5 py-3.5">
                 <div>
                   <h3 className="text-base font-extrabold text-white">
-                    🎬 Colocar Filme ou Vídeo no Telão 3D
+                    🎬 Colocar Filme ou Vídeo no Telão 3D Fixo
                   </h3>
                   <p className="text-xs text-zinc-400">
                     Qualquer usuário pode escolher um filme ou pausar/avançar para todos ao mesmo
@@ -2353,7 +2602,7 @@ export function WatchTogetherStage({
                       required
                       value={inputUrl}
                       onChange={(e) => setInputUrl(e.target.value)}
-                      placeholder="Cole o link do YouTube, arquivo .mp4 direto, Twitch..."
+                      placeholder="Cole o link do YouTube, arquivo .mp4/.webm direto, Twitch..."
                       className="flex-1 rounded-lg bg-[#111214] px-3 py-2 text-xs text-white placeholder-zinc-500 focus:outline-none"
                     />
                     <button
@@ -2367,7 +2616,7 @@ export function WatchTogetherStage({
 
                 <div>
                   <label className="mb-2 block text-xs font-extrabold text-amber-400 uppercase">
-                    🍿 Catálogo Rápido (Play / Pause / Tempo 100% Sincronizado)
+                    🍿 Em Cartaz no Cinema 3D (Play / Pause / Tempo 100% Sincronizado)
                   </label>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     {CATALOG_MOVIES.map((m) => (
@@ -2387,7 +2636,7 @@ export function WatchTogetherStage({
                           <div className="mt-1.5 text-xs font-extrabold text-white">{m.title}</div>
                         </div>
                         <div className="mt-2 text-[11px] font-bold text-[#949cf7]">
-                          ▶ Rodar no Telão para Todos
+                          ▶ Rodar no Telão 3D para Todos
                         </div>
                       </button>
                     ))}
@@ -2399,9 +2648,8 @@ export function WatchTogetherStage({
                     📡 Quer assistir Netflix, Prime Video, Crunchyroll ou site de Filmes?
                   </div>
                   <p className="mt-1 text-[11px] text-zinc-300">
-                    Você pode transmitir a guia do seu navegador com áudio e ela aparece{' '}
-                    <strong>direto dentro do Telão 3D do Cinema</strong> para todo mundo assistir
-                    sentado nas poltronas!
+                    Você pode transmitir a guia do seu navegador com áudio e ela é renderizada como{' '}
+                    <strong>Textura 3D Real fixa na parede do Telão do Cinema</strong>!
                   </p>
                   <button
                     type="button"
