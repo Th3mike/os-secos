@@ -5,12 +5,14 @@ export type RoomSoundEvent =
   | 'stream-stop'
   | 'mic-on'
   | 'mic-off'
+  | 'chat-message'
 
 export interface SoundSettings {
   enabled: boolean
   volume: number // 0 to 1
   joinLeaveSounds: boolean
   streamSounds: boolean
+  chatSounds: boolean
 }
 
 const STORAGE_KEY = 'os-secos-sound-settings'
@@ -20,6 +22,7 @@ export const DEFAULT_SOUND_SETTINGS: SoundSettings = {
   volume: 0.5,
   joinLeaveSounds: true,
   streamSounds: true,
+  chatSounds: true,
 }
 
 export function loadSoundSettings(): SoundSettings {
@@ -45,6 +48,7 @@ export function playRoomEventSound(event: RoomSoundEvent, settings?: SoundSettin
 
   if ((event === 'user-join' || event === 'user-leave') && !cfg.joinLeaveSounds) return
   if ((event === 'stream-start' || event === 'stream-stop') && !cfg.streamSounds) return
+  if (event === 'chat-message' && !cfg.chatSounds) return
 
   const AudioCtx =
     window.AudioContext ||
@@ -81,26 +85,22 @@ export function playRoomEventSound(event: RoomSoundEvent, settings?: SoundSettin
 
     switch (event) {
       case 'user-join':
-        // Clean rising 2-note chime (like Discord join)
-        tone(587.33, 587.33, 0, 0.11, 'sine', 0.8) // D5
-        tone(880, 880, 0.09, 0.18, 'sine', 0.9) // A5
+        tone(587.33, 587.33, 0, 0.11, 'sine', 0.8)
+        tone(880, 880, 0.09, 0.18, 'sine', 0.9)
         break
 
       case 'user-leave':
-        // Clean falling 2-note chime (like Discord leave)
-        tone(783.99, 783.99, 0, 0.11, 'sine', 0.8) // G5
-        tone(523.25, 523.25, 0.09, 0.18, 'sine', 0.7) // C5
+        tone(783.99, 783.99, 0, 0.11, 'sine', 0.8)
+        tone(523.25, 523.25, 0.09, 0.18, 'sine', 0.7)
         break
 
       case 'stream-start':
-        // Crisp 3-note stream online cue
         tone(523.25, 523.25, 0, 0.08, 'triangle', 0.8)
         tone(659.25, 659.25, 0.07, 0.08, 'triangle', 0.85)
         tone(1046.5, 1046.5, 0.14, 0.22, 'triangle', 1)
         break
 
       case 'stream-stop':
-        // Subtle descending stream end cue
         tone(659.25, 523.25, 0, 0.14, 'triangle', 0.75)
         tone(440, 349.23, 0.11, 0.18, 'triangle', 0.7)
         break
@@ -111,6 +111,11 @@ export function playRoomEventSound(event: RoomSoundEvent, settings?: SoundSettin
 
       case 'mic-off':
         tone(660, 440, 0, 0.09, 'sine', 0.5)
+        break
+
+      case 'chat-message':
+        // Subtle Discord-like message pop
+        tone(740, 987.77, 0, 0.07, 'sine', 0.55)
         break
     }
   } catch {

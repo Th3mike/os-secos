@@ -1,9 +1,17 @@
+export interface Role {
+  id: string
+  name: string
+  color: string
+  position: number
+}
+
 export interface UserProfile {
   id: string
   username: string
   avatar_url: string
   discord_tag?: string
   status?: 'online' | 'streaming' | 'idle'
+  role_id?: string | null
   isSpeaking?: boolean
   isMuted?: boolean
   isDeafened?: boolean
@@ -13,10 +21,9 @@ export interface Room {
   id: string
   name: string
   description: string
-  type: 'screen_voice' | 'text'
-  icon?: string
-  isCustom?: boolean
-  createdBy?: string
+  type: 'text' | 'voice'
+  position?: number
+  created_by?: string
 }
 
 export interface ChatMessage {
@@ -29,19 +36,6 @@ export interface ChatMessage {
   created_at: string
 }
 
-export interface SoundEffect {
-  id: string
-  label: string
-  emoji: string
-  color: string
-}
-
-export interface SoundTriggerPayload {
-  soundId: string
-  fromUser: string
-  timestamp: number
-}
-
 export interface SignalPayload {
   type:
     | 'offer'
@@ -50,14 +44,10 @@ export interface SignalPayload {
     | 'request-stream'
     | 'stop-stream'
     | 'speaking-state'
-    | 'soundboard'
-    | 'room-created'
   from: string
   fromUser: UserProfile
   to?: string
   sdp?: RTCSessionDescriptionInit
   candidate?: RTCIceCandidateInit
   isSpeaking?: boolean
-  soundId?: string
-  room?: Room
 }

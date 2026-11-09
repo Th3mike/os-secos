@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { ChatMessage, UserProfile } from '@/types/community'
+import { ChatMessage, UserProfile, Role } from '@/types/community'
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client'
 import { COMMUNITY_EMOTES, getEmoteByCode } from '@/lib/emotes'
 import { EmoteSprite } from './EmoteSprite'
@@ -10,6 +10,9 @@ interface ChatPanelProps {
   roomId: string
   roomName: string
   currentUser: UserProfile
+  roles?: Role[]
+  memberRoles?: Record<string, string | null>
+  fullView?: boolean
   onClose?: () => void
 }
 
@@ -35,7 +38,15 @@ function renderMessageWithEmotes(content: string) {
   })
 }
 
-export function ChatPanel({ roomId, roomName, currentUser, onClose }: ChatPanelProps) {
+export function ChatPanel({
+  roomId,
+  roomName,
+  currentUser,
+  roles = [],
+  memberRoles = {},
+  fullView = false,
+  onClose,
+}: ChatPanelProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [showEmotes, setShowEmotes] = useState(false)
@@ -55,7 +66,7 @@ export function ChatPanel({ roomId, roomName, currentUser, onClose }: ChatPanelP
       .select('*')
       .eq('room_id', roomId)
       .order('created_at', { ascending: true })
-      .limit(50)
+      .limit(60)
       .then(({ data }) => {
         if (data) setMessages(data as ChatMessage[])
       })
@@ -138,47 +149,75 @@ export function ChatPanel({ roomId, roomName, currentUser, onClose }: ChatPanelP
     await sendRawMessage(code)
   }
 
+  const getUserRole = (userId: string) => {
+    const rId = memberRoles[userId]
+    if (!rId) return null
+    return roles.find((r) => r.id === rId) || null
+  }
+
   return (
-    <aside className="relative flex h-full w-full flex-col border-l border-[#1f2023] bg-[#2b2d31] sm:w-80">
-      {/* Discord Chat Header */}
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#1f2023] px-4">
-        <span className="text-xs font-bold text-white"># {roomName.toLowerCase()}</span>
-        {onClose && (
-          <button
-            type="button"
-            onClick={onClose}
-            className="cursor-pointer rounded bg-[#35373c] px-2 py-1 text-[11px] font-medium text-zinc-300 hover:bg-[#404249] hover:text-white"
-          >
-            Ocultar Chat
-          </button>
-        )}
-      </div>
+    <div
+      className={`relative flex h-full flex-col bg-[#313338] ${
+        fullView ? 'flex-1' : 'w-full border-l border-[#1f2023] sm:w-80'
+      }`}
+    >
+      {/* Header */}
+      {!fullView && (
+        <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#1f2023] bg-[#2b2d31] px-4">
+          <span className="text-xs font-bold text-white"># {roomName.toLowerCase()}</span>
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="cursor-pointer rounded bg-[#35373c] px-2 py-1 text-[11px] font-medium text-zinc-300 hover:bg-[#404249] hover:text-white"
+            >
+              Fechar
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Messages */}
-      <div className="flex-1 space-y-3 overflow-y-auto p-3.5">
+      <div className="flex-1 space-y-3.5 overflow-y-auto p-4">
         {messages.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-center text-xs text-zinc-400">
-            Início do canal #{roomName.toLowerCase()}
+          <div className="flex h-full flex-col items-center justify-center text-center">
+            <p className="text-sm font-bold text-white">
+              Bem-vindo ao início de #{roomName.toLowerCase()}
+            </p>
+            <p className="mt-1 text-xs text-[#949ba4]">
+              Este é o começo do histórico deste canal.
+            </p>
           </div>
         ) : (
           messages.map((msg) => {
-            const isMe = msg.user_id === currentUser.id
+            const role = getUserRole(msg.user_id)
             return (
-              <div key={msg.id} className="flex items-start gap-2.5">
+              <div key={msg.id} className="flex items-start gap-3">
                 <img
                   src={msg.avatar_url}
                   alt={msg.username}
-                  className="mt-0.5 h-8 w-8 shrink-0 rounded-full object-cover"
+                  className="mt-0.5 h-9 w-9 shrink-0 rounded-full object-cover"
                 />
                 <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     <span
-                      className={`text-xs font-semibold ${
-                        isMe ? 'text-[#f2f3f5]' : 'text-[#dbdee1]'
-                      }`}
+                      style={{ color: role?.color || '#f2f3f5' }}
+                      className="text-xs font-bold"
                     >
                       {msg.username}
                     </span>
+                    {role && (
+                      <span
+                        style={{
+                          backgroundColor: `${role.color}22`,
+                          color: role.color,
+                          borderColor: `${role.color}55`,
+                        }}
+                        className="rounded border px-1.5 py-0.2 text-[9px] font-bold"
+                      >
+                        {role.name}
+                      </span>
+                    )}
                     <span className="text-[10px] text-[#949ba4]">
                       {new Date(msg.created_at).toLocaleTimeString('pt-BR', {
                         hour: '2-digit',
@@ -199,7 +238,7 @@ export function ChatPanel({ roomId, roomName, currentUser, onClose }: ChatPanelP
 
       {/* Emote Picker Popover */}
       {showEmotes && (
-        <div className="absolute right-3 bottom-16 left-3 z-20 rounded-lg border border-[#1f2023] bg-[#111214] p-2.5 shadow-2xl">
+        <div className="absolute right-4 bottom-16 z-20 w-72 rounded-lg border border-[#1f2023] bg-[#111214] p-2.5 shadow-2xl">
           <div className="mb-2 flex items-center justify-between">
             <span className="text-[11px] font-bold text-zinc-200">Emotes Os Secos</span>
             <button
@@ -227,8 +266,8 @@ export function ChatPanel({ roomId, roomName, currentUser, onClose }: ChatPanelP
       )}
 
       {/* Discord Message Input Bar */}
-      <form onSubmit={sendMessage} className="p-3">
-        <div className="flex items-center gap-1.5 rounded-lg bg-[#383a40] px-3 py-2">
+      <form onSubmit={sendMessage} className="p-3.5 pt-0">
+        <div className="flex items-center gap-2 rounded-lg bg-[#383a40] px-3.5 py-2.5">
           <input
             type="text"
             value={input}
@@ -239,7 +278,7 @@ export function ChatPanel({ roomId, roomName, currentUser, onClose }: ChatPanelP
           <button
             type="button"
             onClick={() => setShowEmotes((s) => !s)}
-            className={`cursor-pointer rounded px-2 py-1 text-[11px] font-semibold ${
+            className={`cursor-pointer rounded px-2.5 py-1 text-[11px] font-semibold ${
               showEmotes
                 ? 'bg-[#5865f2] text-white'
                 : 'bg-[#2b2d31] text-zinc-200 hover:bg-[#1e1f22]'
@@ -249,6 +288,6 @@ export function ChatPanel({ roomId, roomName, currentUser, onClose }: ChatPanelP
           </button>
         </div>
       </form>
-    </aside>
+    </div>
   )
 }
