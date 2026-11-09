@@ -228,6 +228,12 @@ function RemoteVoicePlayer({
       filter.frequency.value = 480
       filter.Q.value = 6.0
       lfoGain.gain.value = 320
+    } else if (voiceEffect === 'bed') {
+      // Sleepy muffled voice under the blanket with slow yawning modulation
+      filter.type = 'lowpass'
+      filter.frequency.value = 340
+      filter.Q.value = 1.8
+      lfoGain.gain.value = 95
     }
   }, [voiceEffect])
 
@@ -1822,6 +1828,7 @@ export function CommunityHub() {
                           <div className="absolute top-2.5 left-2.5 flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-extrabold text-amber-300 ring-1 ring-amber-500/40">
                             <PrankIcon type={activeVoiceFx} className="h-3 w-3" />
                             <span>
+                              {activeVoiceFx === 'bed' && 'A Mimir 💤'}
                               {activeVoiceFx === 'bury' && 'Soterrado'}
                               {activeVoiceFx === 'coffin' && 'No Caixão'}
                               {activeVoiceFx === 'reaper' && 'Voz do Além'}
@@ -1927,7 +1934,7 @@ export function CommunityHub() {
                         {/* Custom SVG 3D Prank Action Buttons (Always visible on Windows!) */}
                         <div
                           onClick={(e) => e.stopPropagation()}
-                          className="mt-3 flex items-center gap-1.5"
+                          className="mt-3 flex flex-wrap items-center justify-center gap-1.5"
                         >
                           {PRANK_OPTIONS.map((prank) => (
                             <button

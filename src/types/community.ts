@@ -42,7 +42,7 @@ export interface ChatMessage {
   created_at: string
 }
 
-export type PrankType = 'bury' | 'coffin' | 'reaper' | 'water'
+export type PrankType = 'bury' | 'coffin' | 'reaper' | 'water' | 'bed'
 
 export interface PrankEvent {
   id: string

@@ -10,6 +10,7 @@ export type RoomSoundEvent =
   | 'prank-coffin'
   | 'prank-reaper'
   | 'prank-water'
+  | 'prank-bed'
 
 export interface SoundSettings {
   enabled: boolean
@@ -152,7 +153,19 @@ export function playRoomEventSound(event: RoomSoundEvent, settings?: SoundSettin
         tone(450, 1200, 0.18, 0.2, 'sine', 0.8)
         tone(600, 1500, 0.36, 0.25, 'sine', 0.9)
         break
+
+      case 'prank-bed':
+        // Music-box lullaby ("nana neném") + sleepy descending yawn
+        tone(659.25, 659.25, 0, 0.22, 'sine', 0.75)
+        tone(587.33, 587.33, 0.24, 0.22, 'sine', 0.75)
+        tone(523.25, 523.25, 0.48, 0.32, 'sine', 0.8)
+        tone(392.0, 392.0, 0.84, 0.45, 'sine', 0.85)
+        tone(280, 130, 1.35, 0.55, 'triangle', 0.65)
+        break
     }
+    setTimeout(() => {
+      ctx.close().catch(() => {})
+    }, 2800)
   } catch {
     // Ignore autoplay restriction
   }

@@ -12,6 +12,13 @@ export const PRANK_OPTIONS: {
   color: string
 }[] = [
   {
+    type: 'bed',
+    label: 'Mandar para a Cama',
+    shortLabel: 'Ninar',
+    voiceEffectLabel: 'Voz Sonolenta Bocejando sob o Cobertor (15s)',
+    color: '#6366f1',
+  },
+  {
     type: 'bury',
     label: 'Enterrar na Cova',
     shortLabel: 'Enterrar',
@@ -43,6 +50,16 @@ export const PRANK_OPTIONS: {
 
 export function PrankIcon({ type, className = 'h-4 w-4' }: { type: PrankType; className?: string }) {
   switch (type) {
+    case 'bed':
+      return (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className}>
+          <path d="M2 4v16" strokeLinecap="round" />
+          <path d="M2 8h18a2 2 0 0 1 2 2v10" strokeLinecap="round" />
+          <path d="M2 17h20" strokeLinecap="round" />
+          <path d="M6 8v9" strokeLinecap="round" />
+          <circle cx="9.5" cy="11.5" r="1.5" />
+        </svg>
+      )
     case 'bury':
       return (
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={className}>
@@ -79,39 +96,77 @@ export function PrankIcon({ type, className = 'h-4 w-4' }: { type: PrankType; cl
   }
 }
 
+// Singleton WebGLRenderer so we NEVER recreate/destroy GPU contexts while a 60/120fps WebRTC video stream is active!
+// Recreating WebGL contexts and shadow maps in Chromium freezes GPU hardware video decoding & WGC screen capture.
+let sharedRenderer: THREE.WebGLRenderer | null = null
+
+function getSharedRenderer(width: number, height: number): THREE.WebGLRenderer {
+  if (!sharedRenderer) {
+    sharedRenderer = new THREE.WebGLRenderer({
+      antialias: false, // Prevents multi-sample framebuffer contention with WebRTC hardware video decoder
+      alpha: true,
+      powerPreference: 'low-power',
+      precision: 'mediump',
+    })
+    sharedRenderer.shadowMap.enabled = false // Zero shadow-map passes = zero GPU stalls on live streams
+  }
+  sharedRenderer.setPixelRatio(1)
+  sharedRenderer.setSize(width, height)
+  return sharedRenderer
+}
+
+function disposeSceneResources(scene: THREE.Scene) {
+  scene.traverse((obj) => {
+    const mesh = obj as THREE.Mesh
+    if (mesh.geometry) {
+      mesh.geometry.dispose()
+    }
+    if (mesh.material) {
+      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material]
+      mats.forEach((mat) => {
+        const stdMat = mat as THREE.MeshStandardMaterial
+        if (stdMat.map) stdMat.map.dispose()
+        mat.dispose()
+      })
+    }
+  })
+}
+
 function createCharacterHeadTexture(avatarUrl: string, username: string): THREE.CanvasTexture {
   const canvas = document.createElement('canvas')
-  canvas.width = 512
-  canvas.height = 512
+  canvas.width = 256
+  canvas.height = 256
   const ctx = canvas.getContext('2d')!
 
   const drawFace = (img?: HTMLImageElement) => {
     ctx.fillStyle = '#27272a'
-    ctx.fillRect(0, 0, 512, 512)
+    ctx.fillRect(0, 0, 256, 256)
 
     if (img) {
-      ctx.drawImage(img, 0, 0, 512, 512)
+      ctx.drawImage(img, 0, 0, 256, 256)
     } else {
       ctx.fillStyle = '#f59e0b'
-      ctx.fillRect(40, 40, 432, 432)
+      ctx.fillRect(20, 20, 216, 216)
     }
 
     // Thick cartoon border
     ctx.strokeStyle = '#18181b'
-    ctx.lineWidth = 22
-    ctx.strokeRect(11, 11, 490, 490)
+    ctx.lineWidth = 12
+    ctx.strokeRect(6, 6, 244, 244)
 
-    // Bottom name tag bar on forehead/chin
-    ctx.fillStyle = 'rgba(0,0,0,0.72)'
-    ctx.fillRect(0, 420, 512, 92)
+    // Bottom name tag bar
+    ctx.fillStyle = 'rgba(0,0,0,0.75)'
+    ctx.fillRect(0, 208, 256, 48)
     ctx.fillStyle = '#ffffff'
-    ctx.font = '900 44px sans-serif'
+    ctx.font = '900 22px sans-serif'
     ctx.textAlign = 'center'
-    ctx.fillText(username.slice(0, 14), 256, 480)
+    ctx.fillText(username.slice(0, 14), 128, 240)
   }
 
   drawFace()
   const tex = new THREE.CanvasTexture(canvas)
+  tex.generateMipmaps = false
+  tex.minFilter = THREE.LinearFilter
 
   const img = new Image()
   img.crossOrigin = 'anonymous'
@@ -132,26 +187,29 @@ function createTextBoardTexture(
   textColor = '#fef08a'
 ): THREE.CanvasTexture {
   const canvas = document.createElement('canvas')
-  canvas.width = 512
-  canvas.height = 256
+  canvas.width = 256
+  canvas.height = 128
   const ctx = canvas.getContext('2d')!
 
   ctx.fillStyle = bgColor
-  ctx.fillRect(0, 0, 512, 256)
+  ctx.fillRect(0, 0, 256, 128)
   ctx.strokeStyle = borderColor
-  ctx.lineWidth = 18
-  ctx.strokeRect(9, 9, 494, 238)
+  ctx.lineWidth = 10
+  ctx.strokeRect(5, 5, 246, 118)
 
   ctx.fillStyle = textColor
-  ctx.font = '900 56px sans-serif'
+  ctx.font = '900 28px sans-serif'
   ctx.textAlign = 'center'
-  ctx.fillText(line1, 256, 115)
+  ctx.fillText(line1, 128, 56)
 
   ctx.fillStyle = '#ffffff'
-  ctx.font = 'bold 42px sans-serif'
-  ctx.fillText(line2, 256, 190)
+  ctx.font = 'bold 21px sans-serif'
+  ctx.fillText(line2, 128, 96)
 
-  return new THREE.CanvasTexture(canvas)
+  const tex = new THREE.CanvasTexture(canvas)
+  tex.generateMipmaps = false
+  tex.minFilter = THREE.LinearFilter
+  return tex
 }
 
 interface Humanoid3D {
@@ -162,6 +220,7 @@ interface Humanoid3D {
   rightArmPivot: THREE.Group
   leftLegPivot: THREE.Group
   rightLegPivot: THREE.Group
+  shadowBlob: THREE.Mesh
 }
 
 function buildHumanoid3D(
@@ -172,10 +231,19 @@ function buildHumanoid3D(
 ): Humanoid3D {
   const root = new THREE.Group()
 
+  // Lightweight contact shadow disc on the ground (replaces expensive WebGL shadow maps)
+  const shadowBlob = new THREE.Mesh(
+    new THREE.CircleGeometry(0.95, 16),
+    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.35 })
+  )
+  shadowBlob.rotation.x = -Math.PI / 2
+  shadowBlob.position.y = 0.02
+  root.add(shadowBlob)
+
   // Head with Discord Avatar on front & back
   const headTex = createCharacterHeadTexture(avatarUrl, username)
-  const headSideMat = new THREE.MeshStandardMaterial({ color: 0x3f3f46, roughness: 0.6 })
-  const headFaceMat = new THREE.MeshStandardMaterial({ map: headTex, roughness: 0.3 })
+  const headSideMat = new THREE.MeshLambertMaterial({ color: 0x3f3f46 })
+  const headFaceMat = new THREE.MeshLambertMaterial({ map: headTex })
   const head = new THREE.Mesh(new THREE.BoxGeometry(1.35, 1.35, 1.35), [
     headSideMat,
     headSideMat,
@@ -185,52 +253,56 @@ function buildHumanoid3D(
     headFaceMat,
   ])
   head.position.y = 2.55
-  head.castShadow = true
   root.add(head)
 
   // Torso
-  const torsoMat = new THREE.MeshStandardMaterial({ color: shirtColor, roughness: 0.6 })
+  const torsoMat = new THREE.MeshLambertMaterial({ color: shirtColor })
   const torso = new THREE.Mesh(new THREE.BoxGeometry(1.25, 1.45, 0.7), torsoMat)
   torso.position.y = 1.15
-  torso.castShadow = true
   root.add(torso)
 
-  // Left Arm
-  const armMat = new THREE.MeshStandardMaterial({ color: shirtColor, roughness: 0.6 })
+  // Left Arm + Hand
+  const armMat = new THREE.MeshLambertMaterial({ color: shirtColor })
+  const handMat = new THREE.MeshLambertMaterial({ color: 0xfbbf24 })
   const leftArmPivot = new THREE.Group()
   leftArmPivot.position.set(-0.85, 1.75, 0)
-  const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.3, 0.42), armMat)
-  leftArm.position.y = -0.55
-  leftArm.castShadow = true
-  leftArmPivot.add(leftArm)
+  const leftArm = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.25, 0.42), armMat)
+  leftArm.position.y = -0.52
+  const leftHand = new THREE.Mesh(new THREE.SphereGeometry(0.24, 8, 8), handMat)
+  leftHand.position.y = -1.2
+  leftArmPivot.add(leftArm, leftHand)
   root.add(leftArmPivot)
 
-  // Right Arm
+  // Right Arm + Hand
   const rightArmPivot = new THREE.Group()
   rightArmPivot.position.set(0.85, 1.75, 0)
-  const rightArm = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.3, 0.42), armMat)
-  rightArm.position.y = -0.55
-  rightArm.castShadow = true
-  rightArmPivot.add(rightArm)
+  const rightArm = new THREE.Mesh(new THREE.BoxGeometry(0.42, 1.25, 0.42), armMat)
+  rightArm.position.y = -0.52
+  const rightHand = new THREE.Mesh(new THREE.SphereGeometry(0.24, 8, 8), handMat)
+  rightHand.position.y = -1.2
+  rightArmPivot.add(rightArm, rightHand)
   root.add(rightArmPivot)
 
-  // Left Leg
-  const legMat = new THREE.MeshStandardMaterial({ color: pantsColor, roughness: 0.7 })
+  // Left Leg + Shoe
+  const legMat = new THREE.MeshLambertMaterial({ color: pantsColor })
+  const shoeMat = new THREE.MeshLambertMaterial({ color: 0x09090b })
   const leftLegPivot = new THREE.Group()
   leftLegPivot.position.set(-0.34, 0.45, 0)
-  const leftLeg = new THREE.Mesh(new THREE.BoxGeometry(0.48, 1.2, 0.5), legMat)
-  leftLeg.position.y = -0.55
-  leftLeg.castShadow = true
-  leftLegPivot.add(leftLeg)
+  const leftLeg = new THREE.Mesh(new THREE.BoxGeometry(0.48, 1.15, 0.5), legMat)
+  leftLeg.position.y = -0.52
+  const leftShoe = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.25, 0.72), shoeMat)
+  leftShoe.position.set(0, -1.05, 0.1)
+  leftLegPivot.add(leftLeg, leftShoe)
   root.add(leftLegPivot)
 
-  // Right Leg
+  // Right Leg + Shoe
   const rightLegPivot = new THREE.Group()
   rightLegPivot.position.set(0.34, 0.45, 0)
-  const rightLeg = new THREE.Mesh(new THREE.BoxGeometry(0.48, 1.2, 0.5), legMat)
-  rightLeg.position.y = -0.55
-  rightLeg.castShadow = true
-  rightLegPivot.add(rightLeg)
+  const rightLeg = new THREE.Mesh(new THREE.BoxGeometry(0.48, 1.15, 0.5), legMat)
+  rightLeg.position.y = -0.52
+  const rightShoe = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.25, 0.72), shoeMat)
+  rightShoe.position.set(0, -1.05, 0.1)
+  rightLegPivot.add(rightLeg, rightShoe)
   root.add(rightLegPivot)
 
   return {
@@ -241,6 +313,7 @@ function buildHumanoid3D(
     rightArmPivot,
     leftLegPivot,
     rightLegPivot,
+    shadowBlob,
   }
 }
 
@@ -251,8 +324,13 @@ interface PrankStageOverlayProps {
 
 export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlayProps) {
   const mountRef = useRef<HTMLDivElement | null>(null)
+  const onCompleteRef = useRef(onComplete)
   const [comicSubtitle, setComicSubtitle] = useState<string>('')
   const [expanded, setExpanded] = useState<boolean>(false)
+
+  useEffect(() => {
+    onCompleteRef.current = onComplete
+  }, [onComplete])
 
   useEffect(() => {
     if (!activePrank || !mountRef.current) return
@@ -262,52 +340,36 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
     const height = container.clientHeight || 225
 
     const scene = new THREE.Scene()
-    scene.fog = new THREE.FogExp2(0x090a0f, 0.025)
+    scene.fog = new THREE.FogExp2(0x090a0f, 0.022)
 
-    const camera = new THREE.PerspectiveCamera(46, width / height, 0.1, 120)
-    const baseCamPos = new THREE.Vector3(0, 4.4, 11.2)
+    const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 90)
+    const baseCamPos = new THREE.Vector3(0, 4.3, 11.0)
     camera.position.copy(baseCamPos)
     camera.lookAt(0, 1.3, 0)
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
-    renderer.setSize(width, height)
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
-    renderer.shadowMap.enabled = true
+    const renderer = getSharedRenderer(width, height)
     container.innerHTML = ''
     container.appendChild(renderer.domElement)
 
-    // Lighting
-    scene.add(new THREE.AmbientLight(0xffffff, 0.85))
-    const sunLight = new THREE.DirectionalLight(0xfff7ed, 2.4)
-    sunLight.position.set(6, 12, 8)
-    sunLight.castShadow = true
+    // Ultra-fast hemisphere + directional lighting (no shadow map passes)
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x1e1b4b, 1.15))
+    const sunLight = new THREE.DirectionalLight(0xfff7ed, 1.65)
+    sunLight.position.set(5, 10, 7)
     scene.add(sunLight)
 
-    const rimLight = new THREE.PointLight(
-      activePrank.type === 'reaper'
-        ? 0xa855f7
-        : activePrank.type === 'water'
-        ? 0x38bdf8
-        : 0xf59e0b,
-      5,
-      22
-    )
-    rimLight.position.set(0, 4, 4)
-    scene.add(rimLight)
-
     // Ground stage island
-    const groundMat = new THREE.MeshStandardMaterial({
+    const groundMat = new THREE.MeshLambertMaterial({
       color:
         activePrank.type === 'water'
           ? 0x0f172a
           : activePrank.type === 'reaper'
           ? 0x1e1035
+          : activePrank.type === 'bed'
+          ? 0x1e1b4b
           : 0x3b2313,
-      roughness: 0.9,
     })
-    const ground = new THREE.Mesh(new THREE.CylinderGeometry(7.5, 8.2, 0.8, 36), groundMat)
+    const ground = new THREE.Mesh(new THREE.CylinderGeometry(7.2, 7.8, 0.8, 24), groundMat)
     ground.position.y = -0.4
-    ground.receiveShadow = true
     scene.add(ground)
 
     // Build BOTH 3D Characters: Attacker (fromUser) & Victim (targetUser)
@@ -319,7 +381,7 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
     const victim = buildHumanoid3D(
       activePrank.targetUser.avatar_url,
       activePrank.targetUser.username,
-      0xdc2626 // Red shirt for victim
+      activePrank.type === 'bed' ? 0xec4899 : 0xdc2626 // Pink pajamas for bed prank!
     )
     scene.add(attacker.root)
     scene.add(victim.root)
@@ -343,68 +405,204 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
     let waterPuddle: THREE.Mesh | null = null
     const waterDrops: { mesh: THREE.Mesh; vy: number; vx: number; vz: number }[] = []
 
+    // BED ("Mandar para a Cama") props
+    let bedGroup: THREE.Group | null = null
+    let blanketMesh: THREE.Mesh | null = null
+    let nightcapGroup: THREE.Group | null = null
+    let moonGroup: THREE.Group | null = null
+    const zzzSprites: { mesh: THREE.Mesh; offset: number }[] = []
+
+    // =========================================================================
+    // SETUP 0: BED ("Mandar para a Cama")
+    // Story: Cozy 3D wooden bed with pillow & blanket -> Attacker carries victim horizontally in arms ->
+    // Attacker lays victim onto the mattress, puts a cute nightcap on their head, pulls the blanket up to their chin,
+    // pats their head while floating "Zzz" & glowing crescent moon appear!
+    // =========================================================================
+    if (activePrank.type === 'bed') {
+      bedGroup = new THREE.Group()
+      const woodMat = new THREE.MeshLambertMaterial({ color: 0x78350f })
+      const mattressMat = new THREE.MeshLambertMaterial({ color: 0xf8fafc })
+      const pillowMat = new THREE.MeshLambertMaterial({ color: 0xe0e7ff })
+
+      // Bed frame base
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.45, 2.5), woodMat)
+      frame.position.set(0, 0.55, 0)
+      bedGroup.add(frame)
+
+      // 4 bed legs
+      const legGeo = new THREE.BoxGeometry(0.28, 0.65, 0.28)
+      const legPositions = [
+        [-2.1, 0.32, -1.05],
+        [2.1, 0.32, -1.05],
+        [-2.1, 0.32, 1.05],
+        [2.1, 0.32, 1.05],
+      ]
+      legPositions.forEach(([lx, ly, lz]) => {
+        const leg = new THREE.Mesh(legGeo, woodMat)
+        leg.position.set(lx, ly, lz)
+        bedGroup!.add(leg)
+      })
+
+      // Tall wooden headboard with sign "HORA DE MIMIR"
+      const headboardTex = createTextBoardTexture(
+        '💤 A MIMIR',
+        activePrank.targetUser.username.slice(0, 14),
+        '#4338ca',
+        '#312e81',
+        '#fde047'
+      )
+      const headboard = new THREE.Mesh(new THREE.BoxGeometry(0.32, 2.3, 2.5), [
+        new THREE.MeshLambertMaterial({ map: headboardTex }),
+        woodMat,
+        woodMat,
+        woodMat,
+        woodMat,
+        woodMat,
+      ])
+      headboard.position.set(2.15, 1.5, 0)
+      bedGroup.add(headboard)
+
+      // Footboard
+      const footboard = new THREE.Mesh(new THREE.BoxGeometry(0.25, 1.2, 2.5), woodMat)
+      footboard.position.set(-2.18, 0.95, 0)
+      bedGroup.add(footboard)
+
+      // Soft white mattress
+      const mattress = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.45, 2.25), mattressMat)
+      mattress.position.set(0, 0.95, 0)
+      bedGroup.add(mattress)
+
+      // Fluffy pillow on the right side (near headboard)
+      const pillow = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.32, 1.55), pillowMat)
+      pillow.position.set(1.45, 1.28, 0)
+      pillow.rotation.z = 0.12
+      bedGroup.add(pillow)
+
+      // Cozy Indigo/Starry Blanket (starts folded at the foot of the bed, then slides over victim!)
+      const blanketTex = createTextBoardTexture(
+        '🌙 BONS SONHOS',
+        'NANA NENÉM',
+        '#4f46e5',
+        '#3730a3',
+        '#fef08a'
+      )
+      blanketMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(3.1, 0.55, 2.34),
+        new THREE.MeshLambertMaterial({ map: blanketTex })
+      )
+      blanketMesh.position.set(-1.35, 1.28, 0)
+      blanketMesh.scale.set(0.22, 1, 1)
+      bedGroup.add(blanketMesh)
+
+      bedGroup.position.set(0.85, 0, -0.25)
+      scene.add(bedGroup)
+
+      // Cute sleeping nightcap (touca de dormir) attached to victim's head
+      nightcapGroup = new THREE.Group()
+      const capCone = new THREE.Mesh(
+        new THREE.ConeGeometry(0.68, 1.25, 12),
+        new THREE.MeshLambertMaterial({ color: 0x6366f1 })
+      )
+      capCone.position.set(0, 1.1, 0)
+      capCone.rotation.z = -0.35
+      const pomPom = new THREE.Mesh(
+        new THREE.SphereGeometry(0.22, 8, 8),
+        new THREE.MeshLambertMaterial({ color: 0xffffff })
+      )
+      pomPom.position.set(0.25, 1.68, 0)
+      nightcapGroup.add(capCone, pomPom)
+      nightcapGroup.visible = false
+      victim.head.add(nightcapGroup)
+
+      // Glowing yellow Crescent Moon in the sky
+      moonGroup = new THREE.Group()
+      const moonSphere = new THREE.Mesh(
+        new THREE.SphereGeometry(0.85, 16, 16),
+        new THREE.MeshBasicMaterial({ color: 0xfef08a })
+      )
+      moonGroup.add(moonSphere)
+      moonGroup.position.set(3.4, 4.3, -2.5)
+      scene.add(moonGroup)
+
+      // Floating "Zzz" sleep boards rising from the pillow
+      for (let i = 0; i < 3; i++) {
+        const zTex = createTextBoardTexture(
+          i === 0 ? 'Zzz...' : i === 1 ? '💤 ZZZ' : 'MIMINDO',
+          '',
+          '#312e81',
+          '#6366f1',
+          '#fef08a'
+        )
+        const zMesh = new THREE.Mesh(
+          new THREE.BoxGeometry(0.95, 0.48, 0.06),
+          new THREE.MeshBasicMaterial({ map: zTex })
+        )
+        zMesh.visible = false
+        scene.add(zMesh)
+        zzzSprites.push({ mesh: zMesh, offset: i * 0.33 })
+      }
+
+      // Initial positions: Attacker carries victim from the left toward the bed
+      attacker.root.position.set(-4.2, 0, 0.4)
+      attacker.root.rotation.y = 0.35
+      victim.root.position.set(-3.4, 1.45, 0.9)
+      victim.root.rotation.z = -Math.PI / 2.2
+    }
+
     // =========================================================================
     // SETUP 1: BURY ("Enterrar na Cova")
-    // Story: Victim stands in front of open grave -> Attacker kicks/shoves victim into pit ->
-    // Attacker uses shovel in right hand to throw dirt clods -> Dirt mound buries victim -> Tombstone drops!
     // =========================================================================
     if (activePrank.type === 'bury') {
-      // Dark grave hole in the center
       const holeMesh = new THREE.Mesh(
-        new THREE.CylinderGeometry(1.75, 1.75, 0.85, 28),
+        new THREE.CylinderGeometry(1.75, 1.75, 0.85, 20),
         new THREE.MeshBasicMaterial({ color: 0x050302 })
       )
       holeMesh.position.set(0.4, -0.35, 0)
       scene.add(holeMesh)
 
-      // Attacker on the left holding a 3D Shovel in right hand
       attacker.root.position.set(-2.6, 0, 0.3)
       attacker.root.rotation.y = 0.45
 
       const shovel = new THREE.Group()
       const handle = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.07, 0.07, 2.5, 10),
-        new THREE.MeshStandardMaterial({ color: 0x92400e })
+        new THREE.CylinderGeometry(0.07, 0.07, 2.5, 8),
+        new THREE.MeshLambertMaterial({ color: 0x92400e })
       )
       handle.position.y = -0.6
       shovel.add(handle)
       const blade = new THREE.Mesh(
         new THREE.BoxGeometry(0.65, 0.8, 0.08),
-        new THREE.MeshStandardMaterial({ color: 0x9ca3af, metalness: 0.7, roughness: 0.3 })
+        new THREE.MeshLambertMaterial({ color: 0x9ca3af })
       )
       blade.position.y = -1.85
       shovel.add(blade)
       shovel.rotation.x = Math.PI / 2.2
       attacker.rightArmPivot.add(shovel)
 
-      // Victim starts standing right at the edge of the grave
       victim.root.position.set(0.4, 0, 0)
 
-      // Rising dirt mound
       dirtMound = new THREE.Mesh(
-        new THREE.SphereGeometry(1.95, 24, 16, 0, Math.PI * 2, 0, Math.PI / 2),
-        new THREE.MeshStandardMaterial({ color: 0x452711, roughness: 1 })
+        new THREE.SphereGeometry(1.95, 16, 12, 0, Math.PI * 2, 0, Math.PI / 2),
+        new THREE.MeshLambertMaterial({ color: 0x452711 })
       )
       dirtMound.position.set(0.4, -0.05, 0)
       dirtMound.scale.set(1, 0.001, 1)
       scene.add(dirtMound)
 
-      // Flying dirt clods thrown from attacker's shovel into the pit
       const clodGeo = new THREE.DodecahedronGeometry(0.26, 0)
-      const clodMat = new THREE.MeshStandardMaterial({ color: 0x5c3417, roughness: 0.95 })
-      for (let i = 0; i < 28; i++) {
+      const clodMat = new THREE.MeshLambertMaterial({ color: 0x5c3417 })
+      for (let i = 0; i < 18; i++) {
         const mesh = new THREE.Mesh(clodGeo, clodMat)
         mesh.visible = false
         scene.add(mesh)
         dirtClods.push({
           mesh,
-          progress: (i / 28) * 1.0,
+          progress: (i / 18) * 1.0,
           speed: 1.4 + Math.random() * 0.6,
           offsetZ: (Math.random() - 0.5) * 1.1,
         })
       }
 
-      // Giant R.I.P. Tombstone ready to fall from the sky
       const ripTex = createTextBoardTexture(
         'R.I.P. SECO',
         activePrank.targetUser.username.slice(0, 14),
@@ -412,30 +610,29 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
         '#27272a',
         '#fef08a'
       )
-      const stoneMat = new THREE.MeshStandardMaterial({ color: 0x71717a, roughness: 0.85 })
+      const stoneMat = new THREE.MeshLambertMaterial({ color: 0x71717a })
       tombstone = new THREE.Mesh(new THREE.BoxGeometry(2.6, 3.2, 0.55), [
         stoneMat,
         stoneMat,
         stoneMat,
         stoneMat,
-        new THREE.MeshStandardMaterial({ map: ripTex, roughness: 0.5 }),
+        new THREE.MeshLambertMaterial({ map: ripTex }),
         stoneMat,
       ])
       tombstone.position.set(0.4, 12, -1.3)
       scene.add(tombstone)
 
-      // Funny wooden sign "TERRA ↓"
       woodenSign = new THREE.Group()
       const post = new THREE.Mesh(
         new THREE.CylinderGeometry(0.08, 0.08, 2.2, 8),
-        new THREE.MeshStandardMaterial({ color: 0x78350f })
+        new THREE.MeshLambertMaterial({ color: 0x78350f })
       )
       post.position.y = 1.1
       woodenSign.add(post)
       const boardTex = createTextBoardTexture('TERRA ↓', '100% ENTERRADO', '#78350f', '#451a03')
       const board = new THREE.Mesh(
         new THREE.BoxGeometry(2.1, 1.05, 0.14),
-        new THREE.MeshStandardMaterial({ map: boardTex })
+        new THREE.MeshLambertMaterial({ map: boardTex })
       )
       board.position.y = 1.85
       woodenSign.add(board)
@@ -446,13 +643,11 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
 
     // =========================================================================
     // SETUP 2: COFFIN ("Trancar no Caixão")
-    // Story: Standing wooden coffin in center -> Attacker shoves victim backwards into coffin ->
-    // Attacker slams the wooden lid shut -> Attacker hammers nails into the lid -> Coffin spins into the abyss!
     // =========================================================================
     if (activePrank.type === 'coffin') {
       coffinGroup = new THREE.Group()
-      const woodMat = new THREE.MeshStandardMaterial({ color: 0x4a2511, roughness: 0.75 })
-      const innerMat = new THREE.MeshStandardMaterial({ color: 0x1a0b05, roughness: 0.9 })
+      const woodMat = new THREE.MeshLambertMaterial({ color: 0x4a2511 })
+      const innerMat = new THREE.MeshLambertMaterial({ color: 0x1a0b05 })
 
       const backWall = new THREE.Mesh(new THREE.BoxGeometry(2.5, 4.2, 0.25), woodMat)
       backWall.position.set(0, 2.1, -0.95)
@@ -474,7 +669,6 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
       topWall.position.set(0, 4.1, 0)
       coffinGroup.add(topWall)
 
-      // Hinged Door Lid
       coffinLidPivot = new THREE.Group()
       coffinLidPivot.position.set(1.25, 2.1, 0.95)
       const lidTex = createTextBoardTexture(
@@ -485,7 +679,7 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
       )
       const lidMesh = new THREE.Mesh(
         new THREE.BoxGeometry(2.5, 4.2, 0.22),
-        new THREE.MeshStandardMaterial({ map: lidTex, roughness: 0.6 })
+        new THREE.MeshLambertMaterial({ map: lidTex })
       )
       lidMesh.position.set(-1.25, 0, 0)
       coffinLidPivot.add(lidMesh)
@@ -495,23 +689,21 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
       coffinGroup.position.set(0.6, 0, -0.4)
       scene.add(coffinGroup)
 
-      // Victim starts in front of the open coffin
       victim.root.position.set(0.6, 0, 1.3)
 
-      // Attacker on the left with a giant 3D Hammer
       attacker.root.position.set(-2.5, 0, 0.8)
       attacker.root.rotation.y = 0.55
 
       hammerGroup = new THREE.Group()
       const hStick = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.08, 0.08, 1.8, 10),
-        new THREE.MeshStandardMaterial({ color: 0x92400e })
+        new THREE.CylinderGeometry(0.08, 0.08, 1.8, 8),
+        new THREE.MeshLambertMaterial({ color: 0x92400e })
       )
       hStick.position.y = -0.6
       hammerGroup.add(hStick)
       const hHead = new THREE.Mesh(
         new THREE.BoxGeometry(0.9, 0.45, 0.45),
-        new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8, roughness: 0.2 })
+        new THREE.MeshLambertMaterial({ color: 0x94a3b8 })
       )
       hHead.position.y = -1.45
       hammerGroup.add(hHead)
@@ -521,35 +713,29 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
 
     // =========================================================================
     // SETUP 3: REAPER ("Ceifador da Secura")
-    // Story: Attacker wears a dark Reaper hood & giant glowing Scythe -> Dashes across & slashes victim ->
-    // Victim's physical body collapses flat on the ground while a translucent purple Ghost Soul rises out of the body waving goodbye!
     // =========================================================================
     if (activePrank.type === 'reaper') {
-      // Give attacker a dark reaper cloak cone
       reaperCloak = new THREE.Mesh(
-        new THREE.ConeGeometry(1.15, 2.6, 16),
-        new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.9 })
+        new THREE.ConeGeometry(1.15, 2.6, 12),
+        new THREE.MeshLambertMaterial({ color: 0x111827 })
       )
       reaperCloak.position.y = 1.3
       attacker.root.add(reaperCloak)
 
-      // Giant Glowing Scythe in Attacker's hand
       scytheWeapon = new THREE.Group()
       const pole = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.08, 0.08, 3.8, 12),
-        new THREE.MeshStandardMaterial({ color: 0x1f2937 })
+        new THREE.CylinderGeometry(0.08, 0.08, 3.8, 8),
+        new THREE.MeshLambertMaterial({ color: 0x1f2937 })
       )
       pole.position.y = -0.8
       scytheWeapon.add(pole)
 
       const blade = new THREE.Mesh(
         new THREE.ConeGeometry(0.45, 2.3, 4),
-        new THREE.MeshStandardMaterial({
+        new THREE.MeshLambertMaterial({
           color: 0xe9d5ff,
           emissive: 0x9333ea,
-          emissiveIntensity: 0.8,
-          metalness: 0.8,
-          roughness: 0.2,
+          emissiveIntensity: 0.7,
         })
       )
       blade.rotation.z = Math.PI / 2.1
@@ -562,13 +748,13 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
       attacker.root.rotation.y = 0.5
       victim.root.position.set(0.8, 0, 0)
 
-      // Create the translucent Ghost Soul copy of the victim!
       ghostVictim = buildHumanoid3D(
         activePrank.targetUser.avatar_url,
         activePrank.targetUser.username,
         0xa855f7,
         0x7e22ce
       )
+      ghostVictim.shadowBlob.visible = false
       ghostVictim.root.traverse((obj) => {
         if ((obj as THREE.Mesh).isMesh) {
           const m = obj as THREE.Mesh
@@ -576,13 +762,13 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
             m.material = m.material.map((mat) => {
               const cloned = mat.clone()
               cloned.transparent = true
-              cloned.opacity = 0.68
+              cloned.opacity = 0.65
               return cloned
             })
           } else {
             const cloned = m.material.clone()
             cloned.transparent = true
-            cloned.opacity = 0.68
+            cloned.opacity = 0.65
             m.material = cloned
           }
         }
@@ -594,26 +780,22 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
 
     // =========================================================================
     // SETUP 4: WATER ("Hidratar o Seco")
-    // Story: Attacker stands on a platform above victim tipping a giant 3D Metal Bucket ->
-    // Waterfall of 3D water spheres pours onto victim -> A 3D glass water tank fills up submerging the victim!
     // =========================================================================
     if (activePrank.type === 'water') {
       attacker.root.position.set(-2.5, 1.4, 0)
       attacker.root.rotation.y = 0.45
 
-      // Platform under attacker
       const stepBox = new THREE.Mesh(
         new THREE.BoxGeometry(1.8, 1.4, 1.8),
-        new THREE.MeshStandardMaterial({ color: 0x334155 })
+        new THREE.MeshLambertMaterial({ color: 0x334155 })
       )
       stepBox.position.set(-2.5, 0.7, 0)
       scene.add(stepBox)
 
-      // Giant Bucket held by attacker
       waterBucket = new THREE.Group()
       const bucketCyl = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.85, 0.62, 1.45, 24),
-        new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8, roughness: 0.25 })
+        new THREE.CylinderGeometry(0.85, 0.62, 1.45, 16),
+        new THREE.MeshLambertMaterial({ color: 0x94a3b8 })
       )
       waterBucket.add(bucketCyl)
       waterBucket.position.set(-0.9, 3.6, 0)
@@ -621,14 +803,12 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
 
       victim.root.position.set(0.7, 0, 0)
 
-      // Rising translucent 3D Water Tank around the victim
       aquariumTank = new THREE.Mesh(
-        new THREE.CylinderGeometry(1.85, 1.85, 3.8, 28),
-        new THREE.MeshStandardMaterial({
+        new THREE.CylinderGeometry(1.85, 1.85, 3.8, 20),
+        new THREE.MeshLambertMaterial({
           color: 0x0ea5e9,
           transparent: true,
           opacity: 0.42,
-          roughness: 0.1,
         })
       )
       aquariumTank.position.set(0.7, 0.01, 0)
@@ -636,16 +816,16 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
       scene.add(aquariumTank)
 
       waterPuddle = new THREE.Mesh(
-        new THREE.CylinderGeometry(3.2, 3.2, 0.08, 32),
-        new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.15 })
+        new THREE.CylinderGeometry(3.2, 3.2, 0.08, 20),
+        new THREE.MeshLambertMaterial({ color: 0x0284c7 })
       )
       waterPuddle.position.set(0.7, 0.04, 0)
       waterPuddle.scale.set(0.01, 1, 0.01)
       scene.add(waterPuddle)
 
-      const dropGeo = new THREE.SphereGeometry(0.22, 10, 10)
-      const dropMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.1 })
-      for (let i = 0; i < 65; i++) {
+      const dropGeo = new THREE.SphereGeometry(0.22, 8, 8)
+      const dropMat = new THREE.MeshLambertMaterial({ color: 0x38bdf8 })
+      for (let i = 0; i < 36; i++) {
         const mesh = new THREE.Mesh(dropGeo, dropMat)
         mesh.position.set(
           0.1 + (Math.random() - 0.5) * 1.1,
@@ -656,7 +836,7 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
         scene.add(mesh)
         waterDrops.push({
           mesh,
-          vy: -(0.12 + Math.random() * 0.1),
+          vy: -(0.14 + Math.random() * 0.1),
           vx: 0.02 + (Math.random() - 0.5) * 0.04,
           vz: (Math.random() - 0.5) * 0.04,
         })
@@ -664,10 +844,11 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
     }
 
     // =========================================================================
-    // STORYBOARD ANIMATION LOOP
+    // STORYBOARD ANIMATION LOOP (Throttled to 30 FPS so live streams never stutter!)
     // =========================================================================
     let frameId = 0
     const startTime = performance.now()
+    let lastRenderTime = 0
     let currentSubtitle = ''
 
     const updateSubtitle = (text: string) => {
@@ -678,47 +859,133 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
     }
 
     const animate = (now: number) => {
+      frameId = requestAnimationFrame(animate)
+
+      // Cap 3D prank rendering at ~30 FPS (33ms) so the GPU stays 100% free for 60/120fps WebRTC video!
+      if (now - lastRenderTime < 32) return
+      lastRenderTime = now
+
       const elapsed = (now - startTime) / 1000
       let shakeIntensity = 0
 
-      if (activePrank.type === 'bury') {
+      if (activePrank.type === 'bed') {
+        if (elapsed < 1.35) {
+          // ACT 1: Attacker carries victim in their arms walking to the cozy bed
+          updateSubtitle(
+            `${activePrank.fromUser.username} está levando ${activePrank.targetUser.username} no colo para a cama!`
+          )
+          const t = Math.min(1, elapsed / 1.35)
+          const walkBob = Math.abs(Math.sin(elapsed * 14)) * 0.22
+          attacker.root.position.set(-4.2 + t * 3.1, walkBob, 0.85)
+          attacker.leftLegPivot.rotation.x = Math.sin(elapsed * 14) * 0.8
+          attacker.rightLegPivot.rotation.x = -Math.sin(elapsed * 14) * 0.8
+          attacker.leftArmPivot.rotation.x = -1.35
+          attacker.rightArmPivot.rotation.x = -1.35
+
+          // Victim carried horizontally in attacker's arms kicking feet playfully
+          victim.shadowBlob.visible = false
+          victim.root.position.set(attacker.root.position.x + 0.9, 1.5 + walkBob, 1.1)
+          victim.root.rotation.set(0, 0, -Math.PI / 2.15)
+          victim.leftLegPivot.rotation.x = Math.sin(elapsed * 20) * 0.5
+          victim.rightLegPivot.rotation.x = -Math.sin(elapsed * 20) * 0.5
+        } else if (elapsed < 2.65) {
+          // ACT 2: Attacker gently lays victim onto the mattress & puts nightcap on head
+          updateSubtitle(
+            `Colocando ${activePrank.targetUser.username} no travesseiro e puxando o cobertor...`
+          )
+          const t = Math.min(1, (elapsed - 1.35) / 1.2)
+          if (nightcapGroup) nightcapGroup.visible = true
+
+          // Victim settles onto the bed with head on the right pillow
+          victim.root.position.set(-0.6 + t * 0.35, 1.55 - t * 0.15, 0.85 - t * 1.05)
+          victim.root.rotation.set(0, 0, -Math.PI / 2)
+          victim.leftLegPivot.rotation.x = 0
+          victim.rightLegPivot.rotation.x = 0
+          victim.leftArmPivot.rotation.x = 0
+          victim.rightArmPivot.rotation.x = 0
+
+          // Attacker leans over the bed pulling the blanket from foot to chin
+          attacker.root.position.set(-1.1 + t * 1.4, 0, 1.05)
+          attacker.root.rotation.y = 2.6
+          attacker.leftArmPivot.rotation.x = -0.9 + Math.sin(elapsed * 14) * 0.35
+          attacker.rightArmPivot.rotation.x = -0.9 - Math.sin(elapsed * 14) * 0.35
+
+          if (blanketMesh) {
+            const bScale = 0.22 + t * 0.78
+            blanketMesh.scale.set(bScale, 1, 1)
+            blanketMesh.position.x = -1.35 + t * 1.05
+          }
+        } else {
+          // ACT 3: Victim is tucked in snoring with floating "Zzz" & attacker pats their head ("Nana neném")!
+          updateSubtitle(
+            `🛌 BONS SONHOS! ${activePrank.targetUser.username.toUpperCase()} FOI MANDADO PRA CAMA!`
+          )
+          // Attacker stands next to the pillow patting victim's head gently
+          attacker.root.position.set(1.55, 0, 1.15)
+          attacker.root.rotation.y = 2.85
+          attacker.rightArmPivot.rotation.x = -1.15 + Math.sin(elapsed * 12) * 0.32
+          attacker.leftArmPivot.rotation.x = -0.3
+
+          // Blanket breathes up and down as victim snores
+          if (blanketMesh) {
+            blanketMesh.scale.set(1, 1 + Math.sin(elapsed * 5) * 0.12, 1)
+          }
+
+          // Moon gently rocks
+          if (moonGroup) {
+            moonGroup.position.y = 4.3 + Math.sin(elapsed * 3) * 0.2
+          }
+
+          // Floating Zzz bubbles rising above victim's head
+          zzzSprites.forEach((z) => {
+            z.mesh.visible = true
+            const cycle = ((elapsed - 2.65) * 0.55 + z.offset) % 1
+            z.mesh.position.set(
+              1.9 + Math.sin(cycle * Math.PI * 2) * 0.35,
+              1.9 + cycle * 2.6,
+              0
+            )
+            const s = 0.65 + Math.sin(cycle * Math.PI) * 0.5
+            z.mesh.scale.set(s, s, s)
+          })
+        }
+      } else if (activePrank.type === 'bury') {
         if (elapsed < 1.1) {
-          // ACT 1: Attacker runs up and kicks/shoves victim into the open grave!
-          updateSubtitle(`${activePrank.fromUser.username} empurrou ${activePrank.targetUser.username} direto na cova!`)
+          updateSubtitle(
+            `${activePrank.fromUser.username} empurrou ${activePrank.targetUser.username} direto na cova!`
+          )
           const t = elapsed / 1.1
           attacker.root.position.x = -2.6 + t * 1.35
-          attacker.leftLegPivot.rotation.x = -Math.sin(t * Math.PI) * 1.2
-          attacker.rightArmPivot.rotation.x = -Math.sin(t * Math.PI) * 0.9
+          attacker.leftLegPivot.rotation.x = -Math.sin(t * Math.PI) * 1.3
+          attacker.rightArmPivot.rotation.x = -Math.sin(t * Math.PI) * 1.0
 
-          if (elapsed > 0.45) {
-            const fallT = (elapsed - 0.45) / 0.65
+          if (elapsed > 0.42) {
+            const fallT = (elapsed - 0.42) / 0.68
+            victim.shadowBlob.visible = false
             victim.root.position.y = -fallT * 2.15
             victim.root.rotation.z = -fallT * 0.35
             victim.leftArmPivot.rotation.z = 2.6
             victim.rightArmPivot.rotation.z = -2.6
           }
         } else if (elapsed < 3.6) {
-          // ACT 2: Victim panics inside pit while Attacker furiously shovels 3D dirt clods!
           updateSubtitle(`Jogando terra por cima de ${activePrank.targetUser.username}...`)
           victim.root.position.y = -2.15 - (elapsed - 1.1) * 0.35
           victim.leftArmPivot.rotation.x = Math.sin(elapsed * 22) * 0.9
           victim.rightArmPivot.rotation.x = -Math.sin(elapsed * 22) * 0.9
           victim.head.rotation.y = Math.sin(elapsed * 16) * 0.45
 
-          // Shovel digging motion
           attacker.rightArmPivot.rotation.x = -0.8 + Math.sin(elapsed * 14) * 0.85
           attacker.torso.rotation.y = Math.sin(elapsed * 14) * 0.25
 
-          // Parabolic dirt clods flying from shovel (-1.1, 1.4) to grave pit (0.4, 0)
           dirtClods.forEach((c) => {
             c.mesh.visible = true
-            c.progress = (c.progress + 0.025 * c.speed) % 1
+            c.progress = (c.progress + 0.045 * c.speed) % 1
             const p = c.progress
             c.mesh.position.x = -1.0 + p * 1.55
             c.mesh.position.y = 1.2 + Math.sin(p * Math.PI) * 1.9 - p * 1.4
             c.mesh.position.z = c.offsetZ
-            c.mesh.rotation.x += 0.12
-            c.mesh.rotation.y += 0.12
+            c.mesh.rotation.x += 0.2
+            c.mesh.rotation.y += 0.2
           })
 
           if (dirtMound) {
@@ -726,29 +993,28 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
             dirtMound.scale.set(1, moundProgress * 0.95, 1)
           }
         } else {
-          // ACT 3: Giant R.I.P. Tombstone & "TERRA ↓" sign slam down from the sky!
           updateSubtitle(`🪦 R.I.P. ${activePrank.targetUser.username} — SOTERRADO COM SUCESSO!`)
           dirtClods.forEach((c) => (c.mesh.visible = false))
           victim.root.visible = false
 
           if (tombstone) {
             if (tombstone.position.y > 1.55) {
-              tombstone.position.y = Math.max(1.55, tombstone.position.y - 0.85)
+              tombstone.position.y = Math.max(1.55, tombstone.position.y - 1.35)
               if (tombstone.position.y <= 1.6) shakeIntensity = 0.35
             }
           }
           if (woodenSign) {
-            woodenSign.position.y = Math.max(0, woodenSign.position.y - 0.75)
+            woodenSign.position.y = Math.max(0, woodenSign.position.y - 1.2)
           }
-          // Attacker celebrates jumping
           attacker.root.position.y = Math.abs(Math.sin(elapsed * 10)) * 0.45
           attacker.leftArmPivot.rotation.z = 2.5
           attacker.rightArmPivot.rotation.z = -2.5
         }
       } else if (activePrank.type === 'coffin') {
         if (elapsed < 1.2) {
-          // ACT 1: Attacker shoves victim backwards into the open wooden coffin!
-          updateSubtitle(`${activePrank.fromUser.username} jogou ${activePrank.targetUser.username} dentro do caixão!`)
+          updateSubtitle(
+            `${activePrank.fromUser.username} jogou ${activePrank.targetUser.username} dentro do caixão!`
+          )
           const t = Math.min(1, elapsed / 0.9)
           attacker.root.position.x = -2.5 + t * 1.3
           attacker.leftArmPivot.rotation.x = -Math.PI / 2
@@ -759,10 +1025,9 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
           victim.rightArmPivot.rotation.z = -2.2
           victim.head.rotation.y = Math.sin(elapsed * 20) * 0.4
         } else if (elapsed < 2.3) {
-          // ACT 2: Slam the coffin lid shut!
           updateSubtitle(`TRANCANDO A TAMPA DO CAIXÃO!`)
           if (coffinLidPivot) {
-            coffinLidPivot.rotation.y = Math.max(0, coffinLidPivot.rotation.y - 0.18)
+            coffinLidPivot.rotation.y = Math.max(0, coffinLidPivot.rotation.y - 0.28)
             if (coffinLidPivot.rotation.y === 0 && elapsed < 1.55) {
               shakeIntensity = 0.3
             }
@@ -771,8 +1036,9 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
             victim.root.visible = false
           }
         } else if (elapsed < 3.7) {
-          // ACT 3: Attacker hammers nails into the coffin lid while coffin shakes from victim banging inside!
-          updateSubtitle(`Pregando a tampa! ${activePrank.targetUser.username} está batendo lá dentro!`)
+          updateSubtitle(
+            `Pregando a tampa! ${activePrank.targetUser.username} está batendo lá dentro!`
+          )
           attacker.rightArmPivot.rotation.x = -0.6 + Math.sin(elapsed * 24) * 0.95
           if (coffinGroup) {
             coffinGroup.rotation.z = Math.sin(elapsed * 30) * 0.06
@@ -780,18 +1046,18 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
           }
           shakeIntensity = 0.08
         } else {
-          // ACT 4: Coffin spins and sinks into the underground!
           updateSubtitle(`⚰️ ${activePrank.targetUser.username} FOI ENCOMENDADO PRO ALÉM!`)
           if (coffinGroup) {
-            coffinGroup.rotation.y += 0.14
-            coffinGroup.position.y -= 0.08
+            coffinGroup.rotation.y += 0.22
+            coffinGroup.position.y -= 0.14
           }
           attacker.root.position.y = Math.abs(Math.sin(elapsed * 10)) * 0.4
         }
       } else if (activePrank.type === 'reaper') {
         if (elapsed < 1.35) {
-          // ACT 1: Grim Reaper dashes toward victim and swings the glowing scythe!
-          updateSubtitle(`💀 O Ceifador ${activePrank.fromUser.username} veio buscar a alma de ${activePrank.targetUser.username}!`)
+          updateSubtitle(
+            `💀 O Ceifador ${activePrank.fromUser.username} veio buscar a alma de ${activePrank.targetUser.username}!`
+          )
           const t = Math.min(1, elapsed / 1.1)
           attacker.root.position.x = -4.2 + t * 3.4
           attacker.rightArmPivot.rotation.y = -1.5 + t * 3.2
@@ -801,18 +1067,16 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
           victim.rightArmPivot.rotation.z = -2.5
           victim.head.rotation.z = Math.sin(elapsed * 25) * 0.25
         } else {
-          // ACT 2: Slash impact! Physical body falls flat on the ground while translucent Ghost Soul floats up to heaven!
           updateSubtitle(`👻 A ALMA DE ${activePrank.targetUser.username.toUpperCase()} SAIU DO CORPO!`)
           if (elapsed < 1.6) shakeIntensity = 0.32
 
-          // Physical body collapses flat onto the floor
-          victim.root.rotation.x = Math.min(Math.PI / 2, victim.root.rotation.x + 0.14)
-          victim.root.position.y = Math.max(0.25, victim.root.position.y - 0.05)
+          victim.shadowBlob.visible = false
+          victim.root.rotation.x = Math.min(Math.PI / 2, victim.root.rotation.x + 0.22)
+          victim.root.position.y = Math.max(0.25, victim.root.position.y - 0.08)
 
-          // Ghost soul rises out of the fallen body waving goodbye!
           if (ghostVictim) {
             ghostVictim.root.visible = true
-            ghostVictim.root.position.y += 0.032
+            ghostVictim.root.position.y += 0.055
             ghostVictim.root.position.x = 0.8 + Math.sin(elapsed * 4) * 0.45
             ghostVictim.root.rotation.y = Math.sin(elapsed * 3) * 0.45
             ghostVictim.leftArmPivot.rotation.z = 2.4 + Math.sin(elapsed * 14) * 0.4
@@ -821,21 +1085,21 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
         }
       } else if (activePrank.type === 'water') {
         if (elapsed < 0.9) {
-          // ACT 1: Attacker tilts the giant metal bucket over victim's head
-          updateSubtitle(`${activePrank.fromUser.username} virou o balde d'água gelada em ${activePrank.targetUser.username}!`)
+          updateSubtitle(
+            `${activePrank.fromUser.username} virou o balde d'água gelada em ${activePrank.targetUser.username}!`
+          )
           const t = elapsed / 0.9
           if (waterBucket) {
             waterBucket.rotation.z = -t * 2.15
           }
           attacker.rightArmPivot.rotation.x = -t * 1.2
         } else {
-          // ACT 2: Giant waterfall + Glass Aquarium Tank fills up submerging the victim swimming inside!
           updateSubtitle(`🪣 ${activePrank.targetUser.username} ESTÁ AFOGADO TENTANDO NADAR!`)
           waterDrops.forEach((d) => {
             d.mesh.visible = true
-            d.mesh.position.x += d.vx
-            d.mesh.position.y += d.vy
-            d.mesh.position.z += d.vz
+            d.mesh.position.x += d.vx * 1.6
+            d.mesh.position.y += d.vy * 1.6
+            d.mesh.position.z += d.vz * 1.6
             if (d.mesh.position.y < 0.2) {
               d.mesh.position.set(
                 0.5 + (Math.random() - 0.5) * 0.9,
@@ -854,7 +1118,7 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
             waterPuddle.scale.set(fillProgress, 1, fillProgress)
           }
 
-          // Victim floats up inside the water tank flailing arms & legs like swimming!
+          victim.shadowBlob.visible = false
           victim.root.position.y = fillProgress * 0.9 + Math.sin(elapsed * 8) * 0.18
           victim.root.rotation.y = Math.sin(elapsed * 5) * 0.5
           victim.root.rotation.z = Math.cos(elapsed * 6) * 0.2
@@ -865,7 +1129,6 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
         }
       }
 
-      // Apply camera impact shake when heavy props slam
       if (shakeIntensity > 0) {
         camera.position.set(
           baseCamPos.x + (Math.random() - 0.5) * shakeIntensity,
@@ -873,26 +1136,27 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
           baseCamPos.z
         )
       } else {
-        camera.position.lerp(baseCamPos, 0.15)
+        camera.position.lerp(baseCamPos, 0.2)
       }
       camera.lookAt(0, 1.3, 0)
 
       renderer.render(scene, camera)
-      frameId = requestAnimationFrame(animate)
     }
 
     frameId = requestAnimationFrame(animate)
 
     const timer = setTimeout(() => {
-      onComplete()
+      onCompleteRef.current()
     }, 5600)
 
     return () => {
       clearTimeout(timer)
       cancelAnimationFrame(frameId)
-      renderer.dispose()
+      disposeSceneResources(scene)
     }
-  }, [activePrank, expanded, onComplete])
+    // IMPORTANT: Do NOT include inline `onComplete` in dependency array!
+    // Otherwise every speaking-state or presence re-render in CommunityHub restarts the 3D WebGL scene!
+  }, [activePrank, expanded])
 
   if (!activePrank) return null
 
@@ -900,7 +1164,7 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
 
   return (
     <div
-      className={`fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-amber-500/40 bg-[#111214]/95 shadow-2xl backdrop-blur-md transition-all select-none ${
+      className={`fixed z-50 flex flex-col overflow-hidden rounded-2xl border border-amber-500/40 bg-[#111214] shadow-2xl transition-all select-none ${
         expanded
           ? 'right-6 bottom-20 h-[440px] w-[620px] max-w-[92vw]'
           : 'right-4 bottom-20 w-[360px] max-w-[90vw]'
@@ -911,6 +1175,7 @@ export function PrankStageOverlay({ activePrank, onComplete }: PrankStageOverlay
         <div className="min-w-0 flex-1">
           <div className="truncate text-xs font-extrabold text-white">
             <span className="text-amber-400">{activePrank.fromUser.username}</span>{' '}
+            {activePrank.type === 'bed' && 'mandou para a cama'}
             {activePrank.type === 'bury' && 'enterrou'}
             {activePrank.type === 'coffin' && 'trancou no caixão'}
             {activePrank.type === 'reaper' && 'ceifou'}
