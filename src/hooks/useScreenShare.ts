@@ -814,17 +814,17 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           localStreamRef.current.getTracks().forEach((t) => t.stop())
         }
 
-        // IMPORTANT:
-        // 1) Do NOT pass `displaySurface` into getDisplayMedia video constraints on Windows Edge/Chromium!
-        //    Passing `displaySurface: 'monitor' | 'window'` forces the DXGI Desktop Duplication / Window enumeration
-        //    hook inside Windows DWM / explorer.exe to spin and spike explorer.exe CPU until the taskbar freezes!
-        // 2) Request clean ideal resolution & FPS and let the native browser picker handle surface selection smoothly.
+        const videoConstraints: MediaTrackConstraints & { displaySurface?: string } = {
+          width: { ideal: widthMap[options.resolution] },
+          height: { ideal: heightMap[options.resolution] },
+          frameRate: { ideal: options.fps },
+        }
+        if (options.surface) {
+          videoConstraints.displaySurface = options.surface
+        }
+
         const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: {
-            width: { ideal: widthMap[options.resolution] },
-            height: { ideal: heightMap[options.resolution] },
-            frameRate: { ideal: options.fps },
-          },
+          video: videoConstraints,
           audio: options.includeAudio
             ? {
                 echoCancellation: false,
@@ -832,6 +832,9 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
                 autoGainControl: false,
               }
             : false,
+          // @ts-expect-error Chromium screen share options to avoid infinite mirror
+          selfBrowserSurface: 'exclude',
+          surfaceSwitching: 'include',
         })
 
         const [videoTrack] = stream.getVideoTracks()

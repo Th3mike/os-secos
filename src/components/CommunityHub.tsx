@@ -2829,17 +2829,13 @@ export function CommunityHub() {
                 </div>
               </div>
 
-              {/* Anti-Explorer Lag & Yellow Border Tip for Windows Edge/Chrome */}
+              {/* Anti-Explorer Lag & Yellow Border Tip for Windows 10 */}
               <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 p-3 text-[11px] text-amber-200/90">
                 <div className="font-extrabold text-amber-300">
-                  💡 Dica para tirar a borda amarela e zerar o uso do Windows Explorer:
+                  ⚠️ Usa Windows 10? Evite a aba &quot;Janela&quot; para não travar o Explorer:
                 </div>
                 <p className="mt-0.5 text-[10px] leading-relaxed text-zinc-300">
-                  No Edge ou Chrome, cole{' '}
-                  <code className="rounded bg-black/50 px-1.5 py-0.5 font-mono text-amber-300 select-all">
-                    edge://flags/#enable-wgc-screen-capture
-                  </code>{' '}
-                  (ou <code className="rounded bg-black/50 px-1 py-0.5 font-mono text-amber-300 select-all">chrome://flags/#enable-wgc-screen-capture</code>) na barra de endereço e mude para <strong>Disabled</strong>. Isso desativa a borda amarela do Windows e usa DirectX puro sem pesar no <code className="font-mono">explorer.exe</code>!
+                  No Windows 10, compartilhar uma <strong>Janela</strong> ativa o bug da borda amarela (WGC) da Microsoft que trava o <code className="font-mono">explorer.exe</code> após alguns minutos. Na janela do navegador que abrir, escolha sempre a aba <strong>&quot;Tela cheia&quot; (Tela Inteira)</strong> ou <strong>&quot;Guias do navegador&quot;</strong> — elas usam DirectX (DXGI) puro, sem borda amarela e <strong>sem travar o seu PC</strong>!
                 </p>
               </div>
             </div>
