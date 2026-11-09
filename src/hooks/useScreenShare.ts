@@ -20,6 +20,59 @@ const ICE_SERVERS: RTCConfiguration = {
   ],
 }
 
+/**
+ * Boosts WebRTC SDP bandwidth & Google WebRTC congestion control floor (`x-google-min-bitrate`, `x-google-start-bitrate`, `b=AS:`)
+ * so Chromium never starts at 300kbps (540p) or collapses to 1 FPS!
+ */
+function boostSdpVideoBandwidth(sdp: string, resolution: '720p' | '1080p' | '1440p', fps: number): string {
+  const maxKbps =
+    resolution === '1440p'
+      ? fps === 120
+        ? 16000
+        : 12000
+      : resolution === '1080p'
+        ? fps === 120
+          ? 10000
+          : 8000
+        : 5000
+  const startKbps = Math.round(maxKbps * 0.65)
+  const minKbps = 2500
+
+  let lines = sdp.split('\r\n')
+  const out: string[] = []
+  let inVideo = false
+  let bandwidthAdded = false
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (line.startsWith('m=video')) {
+      inVideo = true
+      bandwidthAdded = false
+    } else if (line.startsWith('m=')) {
+      inVideo = false
+    }
+
+    out.push(line)
+
+    // Inject b=AS:<kbps> right after c=IN line inside m=video section
+    if (inVideo && !bandwidthAdded && line.startsWith('c=IN')) {
+      out.push(`b=AS:${maxKbps}`)
+      bandwidthAdded = true
+    }
+
+    // Add x-google-start-bitrate / x-google-min-bitrate to VP8/VP9/H264 fmtp lines
+    if (
+      inVideo &&
+      line.startsWith('a=fmtp:') &&
+      !line.includes('x-google-max-bitrate')
+    ) {
+      out[out.length - 1] = `${line};x-google-min-bitrate=${minKbps};x-google-start-bitrate=${startKbps};x-google-max-bitrate=${maxKbps}`
+    }
+  }
+
+  return out.join('\r\n')
+}
+
 export interface RemoteStreamItem {
   peerId: string
   user: UserProfile
@@ -258,13 +311,12 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const applySenderHighQualityParameters = useCallback(async (pc: RTCPeerConnection) => {
     const opts = shareOptionsRef.current
     // High bitrates for crystal-clear sharpness & smooth 60/120fps without blockiness:
-    // 720p -> 8 Mbps, 1080p -> 15 Mbps, 1440p -> 24 Mbps (boosted by 30% for 120fps)
     const baseBps =
       opts.resolution === '1440p'
-        ? 20_000_000
+        ? 14_000_000
         : opts.resolution === '1080p'
-          ? 12_000_000
-          : 6_500_000
+          ? 8_500_000
+          : 5_000_000
     const maxBitrate = opts.fps === 120 ? Math.round(baseBps * 1.35) : baseBps
 
     for (const sender of pc.getSenders()) {
@@ -279,9 +331,10 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           params.encodings[0].scaleResolutionDownBy = 1.0
           params.encodings[0].priority = 'high'
           params.encodings[0].networkPriority = 'high'
-            // Maintain resolution so text/UI in screen shares never gets blurry!
-            ; (params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference =
-              'maintain-resolution'
+          // NEVER use 'maintain-resolution' because WebRTC drops framerate to 1 FPS when bandwidth dips!
+          // Use 'balanced' (or 'maintain-framerate') so the stream ALWAYS stays 60/120 FPS smooth!
+          ;(params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference =
+            'balanced'
           await sender.setParameters(params)
         } catch {
           // Ignore if browser doesn't support specific encoding param
@@ -321,7 +374,12 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       await applySenderHighQualityParameters(pc)
 
       const offer = await pc.createOffer()
-      await pc.setLocalDescription(offer)
+      const opts = shareOptionsRef.current
+      const boostedOffer: RTCSessionDescriptionInit = {
+        type: offer.type,
+        sdp: offer.sdp ? boostSdpVideoBandwidth(offer.sdp, opts.resolution, opts.fps) : offer.sdp,
+      }
+      await pc.setLocalDescription(boostedOffer)
       sendSignal({
         type: 'offer',
         from: me.id,
@@ -434,7 +492,14 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             }
             await flushPendingCandidates(sig.from, pc)
             const answer = await pc.createAnswer()
-            await pc.setLocalDescription(answer)
+            const opts = shareOptionsRef.current
+            const boostedAnswer: RTCSessionDescriptionInit = {
+              type: answer.type,
+              sdp: answer.sdp
+                ? boostSdpVideoBandwidth(answer.sdp, opts.resolution, opts.fps)
+                : answer.sdp,
+            }
+            await pc.setLocalDescription(boostedAnswer)
             sendSignal({
               type: 'answer',
               from: curMe.id,
@@ -447,6 +512,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             if (pc && pc.signalingState === 'have-local-offer') {
               await pc.setRemoteDescription(new RTCSessionDescription(sig.sdp))
               await flushPendingCandidates(sig.from, pc)
+              await applySenderHighQualityParameters(pc)
             }
           } else if (sig.type === 'ice-candidate' && sig.candidate) {
             const pc = pcsRef.current.get(sig.from)
@@ -526,6 +592,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   }, [
     roomId,
     currentUserId,
+    applySenderHighQualityParameters,
     cleanupPeer,
     flushPendingCandidates,
     getOrCreatePeerConnection,
@@ -606,13 +673,14 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             await videoTrack.applyConstraints({
               width: { ideal: widthMap[options.resolution] },
               height: { ideal: heightMap[options.resolution] },
-              frameRate: { ideal: options.fps },
+              frameRate: { min: 24, ideal: options.fps },
             })
           } catch {
             // Ignore if OS capture source locks resolution
           }
-          // For 60/120fps use 'motion' for fluid frames; for 30fps use 'detail' for sharpest text
-          videoTrack.contentHint = options.fps >= 60 ? 'motion' : 'detail'
+          // NEVER set contentHint = 'detail' — in WebRTC screen sharing, 'detail' forces a 1-5 FPS slideshow!
+          // Always use 'motion' so the encoder keeps 30/60/120 FPS smooth at all times!
+          videoTrack.contentHint = 'motion'
           videoTrack.onended = () => {
             stopScreenShare()
           }
@@ -960,9 +1028,9 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             await videoTrack.applyConstraints({
               width: { ideal: widthMap[options.resolution] },
               height: { ideal: heightMap[options.resolution] },
-              frameRate: { ideal: options.fps },
+              frameRate: { min: 24, ideal: options.fps },
             })
-            videoTrack.contentHint = options.fps >= 60 ? 'motion' : 'detail'
+            videoTrack.contentHint = 'motion'
           } catch {
             // ignore
           }
