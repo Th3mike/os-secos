@@ -1,9 +1,14 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Mic, MicOff, Headphones, HeadphoneOff, Tv } from 'lucide-react'
+import { Mic, MicOff, Headphones, HeadphoneOff, Tv, AudioWaveform } from 'lucide-react'
 import { Room, UserProfile, Role, ChatMessage, PrankType } from '@/types/community'
-import { useScreenShare, ScreenShareOptions, RemoteAudioItem } from '@/hooks/useScreenShare'
+import {
+  useScreenShare,
+  ScreenShareOptions,
+  RemoteAudioItem,
+  NoiseSuppressionMode,
+} from '@/hooks/useScreenShare'
 import { VideoStage } from './VideoStage'
 import { ChatPanel } from './ChatPanel'
 import { PrankStageOverlay, PRANK_OPTIONS, PrankIcon } from './PrankStageOverlay'
@@ -239,6 +244,7 @@ export function CommunityHub() {
   const [fps, setFps] = useState<ScreenShareOptions['fps']>(60)
   const [soundSettings, setSoundSettings] = useState<SoundSettings>(DEFAULT_SOUND_SETTINGS)
   const [showAudioConfig, setShowAudioConfig] = useState(false)
+  const [showNoiseSuppressionPopover, setShowNoiseSuppressionPopover] = useState(false)
   const [voiceChatOpen, setVoiceChatOpen] = useState(false)
   const [showMembersSidebar, setShowMembersSidebar] = useState(true)
   const [showWatchTogether, setShowWatchTogether] = useState(false)
@@ -355,6 +361,8 @@ export function CommunityHub() {
     micEnabled,
     deafened,
     isSpeaking,
+    micSettings,
+    updateMicSettings,
     speakingPeers,
     peerMuteStates,
     activePrank,
@@ -1056,7 +1064,89 @@ export function CommunityHub() {
 
         {/* Discord Voice Connected Status Panel */}
         {activeVoiceRoom && (
-          <div className="border-t border-[#1f2023] bg-[#232428] px-3 py-2">
+          <div className="relative border-t border-[#1f2023] bg-[#232428] px-3 py-2">
+            {/* Discord-style Krisp Noise Suppression Popover */}
+            {showNoiseSuppressionPopover && (
+              <div className="absolute bottom-12 left-2 right-2 z-40 rounded-lg border border-[#111214] bg-[#2b2d31] p-3 shadow-2xl">
+                <div className="mb-2 flex items-center justify-between border-b border-[#1f2023] pb-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <AudioWaveform className="h-3.5 w-3.5 text-[#23a55a]" />
+                    <span className="text-xs font-extrabold text-white">Supressão de Ruído</span>
+                  </div>
+                  <span className="rounded bg-[#23a55a]/20 px-1.5 py-0.5 text-[9px] font-black text-[#23a55a]">
+                    KRISP DSP
+                  </span>
+                </div>
+
+                <div className="space-y-1 text-[11px]">
+                  {(
+                    [
+                      {
+                        id: 'krisp',
+                        title: 'Krisp (Recomendado)',
+                        desc: 'Remove teclado, ventilador, chiado e aplica Noise Gate igual ao Discord',
+                      },
+                      {
+                        id: 'standard',
+                        title: 'Padrão',
+                        desc: 'Filtro leve do navegador sem cortar o final da voz',
+                      },
+                      {
+                        id: 'off',
+                        title: 'Nenhum (Áudio Puro)',
+                        desc: 'Sem filtro de ruído (ideal para música ou microfone de estúdio)',
+                      },
+                    ] as { id: NoiseSuppressionMode; title: string; desc: string }[]
+                  ).map((opt) => {
+                    const active = micSettings.mode === opt.id
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => updateMicSettings({ mode: opt.id })}
+                        className={`flex w-full cursor-pointer flex-col rounded p-1.5 text-left transition ${
+                          active
+                            ? 'bg-[#404249] text-white ring-1 ring-[#23a55a]'
+                            : 'text-[#b5bac1] hover:bg-[#35373c]'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between font-bold">
+                          <span>{opt.title}</span>
+                          {active && <span className="text-[#23a55a]">●</span>}
+                        </div>
+                        <span className="text-[9px] text-[#949ba4]">{opt.desc}</span>
+                      </button>
+                    )
+                  })}
+                </div>
+
+                <div className="mt-2 space-y-1.5 border-t border-[#1f2023] pt-2 text-[11px]">
+                  <label className="flex cursor-pointer items-center justify-between text-zinc-200">
+                    <span>Cancelamento de Eco</span>
+                    <input
+                      type="checkbox"
+                      checked={micSettings.echoCancellation}
+                      onChange={(e) =>
+                        updateMicSettings({ echoCancellation: e.target.checked })
+                      }
+                      className="accent-[#23a55a]"
+                    />
+                  </label>
+                  <label className="flex cursor-pointer items-center justify-between text-zinc-200">
+                    <span>Controle Automático de Ganho</span>
+                    <input
+                      type="checkbox"
+                      checked={micSettings.autoGainControl}
+                      onChange={(e) =>
+                        updateMicSettings({ autoGainControl: e.target.checked })
+                      }
+                      className="accent-[#23a55a]"
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center justify-between gap-1">
               <div
                 onClick={() => setSelectedChannel(activeVoiceRoom)}
@@ -1069,6 +1159,26 @@ export function CommunityHub() {
               </div>
 
               <div className="flex items-center gap-1">
+                {/* Discord Noise Suppression Button */}
+                <button
+                  type="button"
+                  onClick={() => setShowNoiseSuppressionPopover((v) => !v)}
+                  title={`Supressão de Ruído: ${
+                    micSettings.mode === 'krisp'
+                      ? 'Krisp Ativo'
+                      : micSettings.mode === 'standard'
+                      ? 'Padrão'
+                      : 'Desativada'
+                  }`}
+                  className={`cursor-pointer rounded p-1.5 transition ${
+                    micSettings.mode !== 'off'
+                      ? 'bg-[#23a55a]/20 text-[#23a55a] hover:bg-[#23a55a]/30'
+                      : 'bg-[#2b2d31] text-[#949ba4] hover:bg-[#35373c] hover:text-white'
+                  }`}
+                >
+                  <AudioWaveform className="h-3.5 w-3.5" />
+                </button>
+
                 {!isSharing ? (
                   <button
                     type="button"
@@ -1654,6 +1764,37 @@ export function CommunityHub() {
                   <Headphones className="h-4 w-4" />
                 )}
                 {deafened ? 'Áudio: OFF' : 'Áudio: ON'}
+              </button>
+
+              <button
+                type="button"
+                onClick={() =>
+                  updateMicSettings({
+                    mode:
+                      micSettings.mode === 'krisp'
+                        ? 'standard'
+                        : micSettings.mode === 'standard'
+                        ? 'off'
+                        : 'krisp',
+                  })
+                }
+                title="Alternar Supressão de Ruído (Krisp / Padrão / Desativado)"
+                className={`flex cursor-pointer items-center gap-1.5 rounded-full px-3.5 py-2 text-xs font-bold transition ${
+                  micSettings.mode === 'krisp'
+                    ? 'bg-[#23a55a]/20 text-[#23a55a] ring-1 ring-[#23a55a]/50 hover:bg-[#23a55a]/30'
+                    : micSettings.mode === 'standard'
+                    ? 'bg-[#5865f2]/20 text-[#949cf7] ring-1 ring-[#5865f2]/50 hover:bg-[#5865f2]/30'
+                    : 'bg-[#2b2d31] text-zinc-400 hover:bg-[#35373c]'
+                }`}
+              >
+                <AudioWaveform className="h-4 w-4" />
+                <span>
+                  {micSettings.mode === 'krisp'
+                    ? 'Ruído: Krisp'
+                    : micSettings.mode === 'standard'
+                    ? 'Ruído: Padrão'
+                    : 'Ruído: OFF'}
+                </span>
               </button>
 
               {!isSharing ? (

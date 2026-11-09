@@ -38,6 +38,34 @@ export interface ScreenShareOptions {
   includeAudio: boolean
 }
 
+export type NoiseSuppressionMode = 'krisp' | 'standard' | 'off'
+
+export interface MicAudioSettings {
+  mode: NoiseSuppressionMode
+  echoCancellation: boolean
+  autoGainControl: boolean
+}
+
+const MIC_SETTINGS_KEY = 'os_secos_mic_settings_v1'
+
+export function loadMicSettings(): MicAudioSettings {
+  if (typeof window === 'undefined') {
+    return { mode: 'krisp', echoCancellation: true, autoGainControl: true }
+  }
+  try {
+    const raw = localStorage.getItem(MIC_SETTINGS_KEY)
+    if (!raw) return { mode: 'krisp', echoCancellation: true, autoGainControl: true }
+    const parsed = JSON.parse(raw)
+    return {
+      mode: parsed.mode || 'krisp',
+      echoCancellation: parsed.echoCancellation ?? true,
+      autoGainControl: parsed.autoGainControl ?? true,
+    }
+  } catch {
+    return { mode: 'krisp', echoCancellation: true, autoGainControl: true }
+  }
+}
+
 export function useScreenShare(roomId: string, currentUser: UserProfile | null) {
   const [localStream, setLocalStream] = useState<MediaStream | null>(null)
   const [isSharing, setIsSharing] = useState(false)
@@ -47,6 +75,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const [micEnabled, setMicEnabled] = useState(false)
   const [deafened, setDeafened] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
+  const [micSettings, setMicSettings] = useState<MicAudioSettings>(() => loadMicSettings())
   const [speakingPeers, setSpeakingPeers] = useState<Record<string, boolean>>({})
   const [peerMuteStates, setPeerMuteStates] = useState<
     Record<string, { isMuted: boolean; isDeafened: boolean }>
@@ -58,7 +87,14 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const currentUserRef = useRef<UserProfile | null>(currentUser)
   const roomPeersRef = useRef<UserProfile[]>([])
   const localStreamRef = useRef<MediaStream | null>(null)
+  const rawMicStreamRef = useRef<MediaStream | null>(null)
   const micStreamRef = useRef<MediaStream | null>(null)
+  const micAudioCtxRef = useRef<AudioContext | null>(null)
+  const micHighpassRef = useRef<BiquadFilterNode | null>(null)
+  const micNotchRef = useRef<BiquadFilterNode | null>(null)
+  const micLowpassRef = useRef<BiquadFilterNode | null>(null)
+  const micGateGainRef = useRef<GainNode | null>(null)
+  const micSettingsRef = useRef<MicAudioSettings>(micSettings)
   const micEnabledRef = useRef(false)
   const deafenedRef = useRef(false)
   const watchStateRef = useRef<WatchTogetherState | null>(null)
@@ -554,6 +590,60 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     [renegotiateAllPeers, stopScreenShare]
   )
 
+  const updateMicSettings = useCallback((partial: Partial<MicAudioSettings>) => {
+    setMicSettings((prev) => {
+      const next: MicAudioSettings = { ...prev, ...partial }
+      micSettingsRef.current = next
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(MIC_SETTINGS_KEY, JSON.stringify(next))
+        } catch {
+          // ignore
+        }
+      }
+
+      // Apply live WebRTC hardware constraints if mic is active
+      if (rawMicStreamRef.current) {
+        const track = rawMicStreamRef.current.getAudioTracks()[0]
+        if (track && track.applyConstraints) {
+          track
+            .applyConstraints({
+              noiseSuppression: next.mode !== 'off',
+              echoCancellation: next.echoCancellation,
+              autoGainControl: next.autoGainControl,
+            })
+            .catch(() => {})
+        }
+      }
+
+      // Apply live DSP filter updates if AudioContext is running
+      if (micHighpassRef.current && micNotchRef.current && micLowpassRef.current && micGateGainRef.current) {
+        if (next.mode === 'krisp') {
+          micHighpassRef.current.type = 'highpass'
+          micHighpassRef.current.frequency.value = 105
+          micNotchRef.current.type = 'notch'
+          micNotchRef.current.frequency.value = 60
+          micNotchRef.current.Q.value = 10
+          micLowpassRef.current.type = 'lowpass'
+          micLowpassRef.current.frequency.value = 8200
+        } else if (next.mode === 'standard') {
+          micHighpassRef.current.type = 'highpass'
+          micHighpassRef.current.frequency.value = 70
+          micNotchRef.current.type = 'allpass'
+          micLowpassRef.current.type = 'allpass'
+          micGateGainRef.current.gain.value = 1
+        } else {
+          micHighpassRef.current.type = 'allpass'
+          micNotchRef.current.type = 'allpass'
+          micLowpassRef.current.type = 'allpass'
+          micGateGainRef.current.gain.value = 1
+        }
+      }
+
+      return next
+    })
+  }, [])
+
   const toggleMic = useCallback(async () => {
     const me = currentUserRef.current
     if (!me) return
@@ -566,7 +656,11 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           })
           track.stop()
         })
+        rawMicStreamRef.current?.getTracks().forEach((t) => t.stop())
+        rawMicStreamRef.current = null
         micStreamRef.current = null
+        micAudioCtxRef.current?.close().catch(() => {})
+        micAudioCtxRef.current = null
         setMicEnabled(false)
         setIsSpeaking(false)
         playRoomEventSound('mic-off')
@@ -596,14 +690,117 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           })
         }
       } else {
-        const audioStream = await navigator.mediaDevices.getUserMedia({
+        const cfg = micSettingsRef.current
+        const rawAudioStream = await navigator.mediaDevices.getUserMedia({
           audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
+            echoCancellation: cfg.echoCancellation,
+            noiseSuppression: cfg.mode !== 'off',
+            autoGainControl: cfg.autoGainControl,
           },
         })
-        micStreamRef.current = audioStream
+        rawMicStreamRef.current = rawAudioStream
+
+        let outboundStream = rawAudioStream
+
+        const AudioCtx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+        if (AudioCtx) {
+          const audioCtx = new AudioCtx()
+          micAudioCtxRef.current = audioCtx
+          const source = audioCtx.createMediaStreamSource(rawAudioStream)
+
+          // Discord-style Krisp / Noise Suppression + Noise Gate Pipeline:
+          // 1. Highpass removes AC / desk rumble (<105Hz)
+          const highpass = audioCtx.createBiquadFilter()
+          highpass.type = cfg.mode === 'off' ? 'allpass' : 'highpass'
+          highpass.frequency.value = cfg.mode === 'krisp' ? 105 : 70
+          micHighpassRef.current = highpass
+
+          // 2. Notch filter removes 60Hz electrical hum
+          const notch = audioCtx.createBiquadFilter()
+          notch.type = cfg.mode === 'krisp' ? 'notch' : 'allpass'
+          notch.frequency.value = 60
+          notch.Q.value = 10
+          micNotchRef.current = notch
+
+          // 3. Lowpass removes high-frequency keyboard click/hiss (>8.2kHz)
+          const lowpass = audioCtx.createBiquadFilter()
+          lowpass.type = cfg.mode === 'krisp' ? 'lowpass' : 'allpass'
+          lowpass.frequency.value = 8200
+          micLowpassRef.current = lowpass
+
+          // 4. Dynamics compressor levels voice
+          const compressor = audioCtx.createDynamicsCompressor()
+          compressor.threshold.value = -26
+          compressor.knee.value = 18
+          compressor.ratio.value = 4
+          compressor.attack.value = 0.003
+          compressor.release.value = 0.15
+
+          // 5. Intelligent Voice Activity Noise Gate (cuts background typing/fan noise when not speaking)
+          const gateGain = audioCtx.createGain()
+          gateGain.gain.value = 1
+          micGateGainRef.current = gateGain
+
+          const analyser = audioCtx.createAnalyser()
+          analyser.fftSize = 256
+
+          const destination = audioCtx.createMediaStreamDestination()
+
+          source.connect(highpass)
+          highpass.connect(notch)
+          notch.connect(lowpass)
+          lowpass.connect(compressor)
+          compressor.connect(analyser)
+          analyser.connect(gateGain)
+          gateGain.connect(destination)
+
+          outboundStream = destination.stream
+
+          const dataArray = new Uint8Array(analyser.frequencyBinCount)
+          let lastState = false
+
+          audioAnalyserIntervalRef.current = setInterval(() => {
+            analyser.getByteFrequencyData(dataArray)
+            // Focus on human voice frequencies (bins 2 to 45)
+            let sum = 0
+            const voiceBins = Math.min(48, dataArray.length)
+            for (let i = 2; i < voiceBins; i++) {
+              sum += dataArray[i]
+            }
+            const avg = sum / (voiceBins - 2)
+            const threshold = micSettingsRef.current.mode === 'krisp' ? 16 : 12
+            const talking = avg > threshold
+
+            // Smooth noise gate attenuation in 'krisp' mode when user is silent
+            if (micGateGainRef.current && micAudioCtxRef.current) {
+              const targetGain =
+                micSettingsRef.current.mode === 'krisp' ? (talking ? 1.0 : 0.02) : 1.0
+              micGateGainRef.current.gain.setTargetAtTime(
+                targetGain,
+                micAudioCtxRef.current.currentTime,
+                talking ? 0.015 : 0.08
+              )
+            }
+
+            if (talking !== lastState) {
+              lastState = talking
+              setIsSpeaking(talking)
+              const curMe = currentUserRef.current
+              if (curMe) {
+                sendSignal({
+                  type: 'speaking-state',
+                  from: curMe.id,
+                  fromUser: curMe,
+                  isSpeaking: talking,
+                })
+              }
+            }
+          }, 90)
+        }
+
+        micStreamRef.current = outboundStream
         setMicEnabled(true)
         setDeafened(false)
         playRoomEventSound('mic-on')
@@ -622,38 +819,6 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             isMuted: false,
             isDeafened: false,
           })
-        }
-
-        const AudioCtx =
-          window.AudioContext ||
-          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
-        if (AudioCtx) {
-          const audioCtx = new AudioCtx()
-          const source = audioCtx.createMediaStreamSource(audioStream)
-          const analyser = audioCtx.createAnalyser()
-          analyser.fftSize = 256
-          source.connect(analyser)
-          const dataArray = new Uint8Array(analyser.frequencyBinCount)
-
-          let lastState = false
-          audioAnalyserIntervalRef.current = setInterval(() => {
-            analyser.getByteFrequencyData(dataArray)
-            const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length
-            const talking = avg > 18
-            if (talking !== lastState) {
-              lastState = talking
-              setIsSpeaking(talking)
-              const curMe = currentUserRef.current
-              if (curMe) {
-                sendSignal({
-                  type: 'speaking-state',
-                  from: curMe.id,
-                  fromUser: curMe,
-                  isSpeaking: talking,
-                })
-              }
-            }
-          }, 140)
         }
 
         await renegotiateAllPeers()
@@ -737,6 +902,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     micEnabled,
     deafened,
     isSpeaking,
+    micSettings,
+    updateMicSettings,
     speakingPeers,
     peerMuteStates,
     activePrank,
