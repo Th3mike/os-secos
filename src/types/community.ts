@@ -12,6 +12,7 @@ export interface UserProfile {
   discord_tag?: string
   status?: 'online' | 'streaming' | 'idle'
   role_id?: string | null
+  role_ids?: string[]
   voice_room_id?: string | null
   isSpeaking?: boolean
   isMuted?: boolean

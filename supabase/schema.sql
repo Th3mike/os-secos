@@ -102,6 +102,11 @@ create table if not exists public.user_profiles (
 
 alter table public.user_profiles add column if not exists joined_at timestamptz not null default now();
 alter table public.user_profiles add column if not exists last_seen_at timestamptz not null default now();
+alter table public.user_profiles add column if not exists role_ids text[] not null default array['seco-raiz']::text[];
+
+update public.user_profiles
+set role_ids = array[role_id]
+where role_id is not null and (role_ids is null or array_length(role_ids, 1) is null);
 
 alter table public.user_profiles enable row level security;
 

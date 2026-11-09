@@ -11,7 +11,7 @@ interface ChatPanelProps {
   roomName: string
   currentUser: UserProfile
   roles?: Role[]
-  memberRoles?: Record<string, string | null>
+  memberRoles?: Record<string, string[]>
   fullView?: boolean
   onClose?: () => void
 }
@@ -149,10 +149,11 @@ export function ChatPanel({
     await sendRawMessage(code)
   }
 
-  const getUserRole = (userId: string) => {
-    const rId = memberRoles[userId]
-    if (!rId) return null
-    return roles.find((r) => r.id === rId) || null
+  const getUserRoles = (userId: string): Role[] => {
+    const rIds = memberRoles[userId] || ['seco-raiz']
+    return roles
+      .filter((r) => rIds.includes(r.id))
+      .sort((a, b) => a.position - b.position)
   }
 
   return (
@@ -190,7 +191,8 @@ export function ChatPanel({
           </div>
         ) : (
           messages.map((msg) => {
-            const role = getUserRole(msg.user_id)
+            const userRoles = getUserRoles(msg.user_id)
+            const primaryRole = userRoles[0]
             return (
               <div key={msg.id} className="flex items-start gap-3">
                 <img
@@ -201,13 +203,14 @@ export function ChatPanel({
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span
-                      style={{ color: role?.color || '#f2f3f5' }}
+                      style={{ color: primaryRole?.color || '#f2f3f5' }}
                       className="text-xs font-bold"
                     >
                       {msg.username}
                     </span>
-                    {role && (
+                    {userRoles.map((role) => (
                       <span
+                        key={role.id}
                         style={{
                           backgroundColor: `${role.color}22`,
                           color: role.color,
@@ -217,7 +220,7 @@ export function ChatPanel({
                       >
                         {role.name}
                       </span>
-                    )}
+                    ))}
                     <span className="text-[10px] text-[#949ba4]">
                       {new Date(msg.created_at).toLocaleTimeString('pt-BR', {
                         hour: '2-digit',

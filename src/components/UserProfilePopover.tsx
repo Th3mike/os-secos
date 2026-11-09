@@ -1,17 +1,16 @@
 'use client'
 
-import { UserProfile, Role } from '@/types/community'
-import { PRANK_OPTIONS } from './PrankStageOverlay'
-import { PrankType } from '@/types/community'
+import { UserProfile, Role, PrankType } from '@/types/community'
+import { PRANK_OPTIONS, PrankIcon } from './PrankStageOverlay'
 
 interface UserProfilePopoverProps {
   member: UserProfile
   roles: Role[]
-  currentRoleId: string
+  currentRoleIds: string[]
   isOnline: boolean
   currentVoiceRoomName?: string | null
   canPrank: boolean
-  onAssignRole: (userId: string, roleId: string) => void
+  onToggleRole: (userId: string, roleId: string) => void
   onTriggerPrank: (type: PrankType, target: UserProfile) => void
   onClose: () => void
 }
@@ -47,15 +46,18 @@ export function formatJoinDate(isoDate?: string): string {
 export function UserProfilePopover({
   member,
   roles,
-  currentRoleId,
+  currentRoleIds,
   isOnline,
   currentVoiceRoomName,
   canPrank,
-  onAssignRole,
+  onToggleRole,
   onTriggerPrank,
   onClose,
 }: UserProfilePopoverProps) {
-  const roleObj = roles.find((r) => r.id === currentRoleId) || roles[0]
+  const memberRolesObjs = roles
+    .filter((r) => currentRoleIds.includes(r.id))
+    .sort((a, b) => a.position - b.position)
+  const primaryRole = memberRolesObjs[0] || roles[0]
 
   return (
     <div
@@ -64,11 +66,11 @@ export function UserProfilePopover({
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="w-full max-w-xs overflow-hidden rounded-xl border border-[#1f2023] bg-[#111214] shadow-2xl"
+        className="w-full max-w-sm overflow-hidden rounded-xl border border-[#1f2023] bg-[#111214] shadow-2xl"
       >
-        {/* Top Banner with Role Color */}
+        {/* Top Banner with Primary Role Color */}
         <div
-          style={{ backgroundColor: roleObj?.color || '#5865f2' }}
+          style={{ backgroundColor: primaryRole?.color || '#5865f2' }}
           className="h-16 w-full"
         />
 
@@ -87,10 +89,10 @@ export function UserProfilePopover({
             />
           </div>
 
-          <div className="rounded-lg bg-[#232428] p-3 space-y-3">
+          <div className="rounded-lg bg-[#232428] p-3.5 space-y-3">
             <div>
               <h4
-                style={{ color: roleObj?.color || '#ffffff' }}
+                style={{ color: primaryRole?.color || '#ffffff' }}
                 className="text-base font-extrabold"
               >
                 {member.username}
@@ -114,29 +116,43 @@ export function UserProfilePopover({
               </div>
             </div>
 
-            {/* Role Selector */}
+            {/* Multiple Roles Selector (Discord Style Pill Checkboxes) */}
             <div className="border-t border-[#2b2d31] pt-2.5">
-              <div className="mb-1 text-[10px] font-bold tracking-wider text-[#b5bac1] uppercase">
-                Cargo
+              <div className="mb-1.5 text-[10px] font-bold tracking-wider text-[#b5bac1] uppercase">
+                Cargos (Clique para adicionar / remover)
               </div>
-              <select
-                value={currentRoleId}
-                onChange={(e) => onAssignRole(member.id, e.target.value)}
-                className="w-full cursor-pointer rounded bg-[#111214] px-2.5 py-1.5 text-xs font-bold text-white focus:outline-none"
-              >
-                {roles.map((r) => (
-                  <option key={r.id} value={r.id} className="bg-[#111214]">
-                    {r.name}
-                  </option>
-                ))}
-              </select>
+              <div className="flex flex-wrap gap-1.5">
+                {roles.map((r) => {
+                  const hasRole = currentRoleIds.includes(r.id)
+                  return (
+                    <button
+                      key={r.id}
+                      type="button"
+                      onClick={() => onToggleRole(member.id, r.id)}
+                      style={{
+                        backgroundColor: hasRole ? `${r.color}30` : '#111214',
+                        borderColor: hasRole ? r.color : '#2b2d31',
+                        color: hasRole ? '#ffffff' : '#949ba4',
+                      }}
+                      className="flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-bold transition hover:brightness-110"
+                    >
+                      <span
+                        style={{ backgroundColor: r.color }}
+                        className="h-2.5 w-2.5 rounded-full"
+                      />
+                      <span>{r.name}</span>
+                      {hasRole && <span className="text-[10px] text-emerald-400">✓</span>}
+                    </button>
+                  )
+                })}
+              </div>
             </div>
 
-            {/* Community Pranks (Enterrar, Caixão, etc.) */}
+            {/* Community 3D Pranks with Voice Filter */}
             {canPrank && (
               <div className="border-t border-[#2b2d31] pt-2.5">
                 <div className="mb-1.5 text-[10px] font-bold tracking-wider text-amber-400 uppercase">
-                  Zoar na Call (Efeito 3D para todos)
+                  Zoar na Call (Cena 3D + Efeito na Voz dele por 15s)
                 </div>
                 <div className="grid grid-cols-2 gap-1.5">
                   {PRANK_OPTIONS.map((p) => (
@@ -147,9 +163,9 @@ export function UserProfilePopover({
                         onTriggerPrank(p.type, member)
                         onClose()
                       }}
-                      className="flex cursor-pointer items-center gap-1 rounded bg-[#2b2d31] px-2 py-1.5 text-[11px] font-bold text-zinc-100 hover:bg-[#35373c]"
+                      className="flex cursor-pointer items-center gap-1.5 rounded bg-[#2b2d31] px-2.5 py-2 text-[11px] font-bold text-zinc-100 hover:bg-[#35373c]"
                     >
-                      <span>{p.emoji}</span>
+                      <PrankIcon type={p.type} className="h-4 w-4 shrink-0 text-amber-400" />
                       <span className="truncate">{p.label}</span>
                     </button>
                   ))}
@@ -162,4 +178,3 @@ export function UserProfilePopover({
     </div>
   )
 }
-

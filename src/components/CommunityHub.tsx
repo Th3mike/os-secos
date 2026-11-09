@@ -2,11 +2,11 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { Mic, MicOff, Headphones, HeadphoneOff, Tv } from 'lucide-react'
-import { Room, UserProfile, Role, ChatMessage } from '@/types/community'
+import { Room, UserProfile, Role, ChatMessage, PrankType } from '@/types/community'
 import { useScreenShare, ScreenShareOptions, RemoteAudioItem } from '@/hooks/useScreenShare'
 import { VideoStage } from './VideoStage'
 import { ChatPanel } from './ChatPanel'
-import { PrankStageOverlay, PRANK_OPTIONS } from './PrankStageOverlay'
+import { PrankStageOverlay, PRANK_OPTIONS, PrankIcon } from './PrankStageOverlay'
 import { WatchTogetherStage } from './WatchTogetherStage'
 import { UserProfilePopover, formatRelativeTime } from './UserProfilePopover'
 import {
@@ -65,27 +65,146 @@ function extractDiscordProfile(authUser: User): UserProfile {
   }
 }
 
+/**
+ * Real-time WebAudio Voice Effect Processor!
+ * Applies live DSP filters to a remote peer's voice when they get buried, coffined, reaped, or splashed:
+ * - bury: Muffled underground 280Hz lowpass filter
+ * - coffin: Boxy wooden resonance bandpass filter
+ * - reaper: Haunted ghost echo / delay + high-pass filter
+ * - water: Underwater bubbling LFO filter modulation
+ */
 function RemoteVoicePlayer({
   item,
   muted,
   volume,
+  voiceEffect,
 }: {
   item: RemoteAudioItem
   muted: boolean
   volume: number
+  voiceEffect?: PrankType | null
 }) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
+  const audioCtxRef = useRef<AudioContext | null>(null)
+  const filterRef = useRef<BiquadFilterNode | null>(null)
+  const delayRef = useRef<DelayNode | null>(null)
+  const feedbackGainRef = useRef<GainNode | null>(null)
+  const lfoOscRef = useRef<OscillatorNode | null>(null)
+  const lfoGainRef = useRef<GainNode | null>(null)
+
   useEffect(() => {
-    if (audioRef.current && item.stream) {
-      audioRef.current.srcObject = item.stream
+    if (!audioRef.current || !item.stream) return
+    audioRef.current.srcObject = item.stream
+
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext
+    if (!AudioCtx) return
+
+    try {
+      const ctx = new AudioCtx()
+      audioCtxRef.current = ctx
+      const source = ctx.createMediaStreamSource(item.stream)
+
+      const filter = ctx.createBiquadFilter()
+      filter.type = 'allpass'
+      filterRef.current = filter
+
+      const delay = ctx.createDelay(1.0)
+      delay.delayTime.value = 0
+      delayRef.current = delay
+
+      const feedback = ctx.createGain()
+      feedback.gain.value = 0
+      feedbackGainRef.current = feedback
+
+      const lfoOsc = ctx.createOscillator()
+      const lfoGain = ctx.createGain()
+      lfoOsc.frequency.value = 7
+      lfoGain.gain.value = 0
+      lfoOsc.connect(lfoGain)
+      lfoGain.connect(filter.frequency)
+      lfoOsc.start()
+      lfoOscRef.current = lfoOsc
+      lfoGainRef.current = lfoGain
+
+      // Connect graph: source -> filter -> destination AND filter -> delay -> feedback -> delay -> destination
+      source.connect(filter)
+      filter.connect(ctx.destination)
+
+      filter.connect(delay)
+      delay.connect(feedback)
+      feedback.connect(delay)
+      delay.connect(ctx.destination)
+
+      // Mute raw HTMLAudioElement so we only hear the WebAudio DSP output
+      audioRef.current.muted = true
+    } catch {
+      // Fallback to normal audio element if WebAudio fails
+    }
+
+    return () => {
+      lfoOscRef.current?.stop()
+      audioCtxRef.current?.close().catch(() => {})
     }
   }, [item.stream])
 
+  // Update DSP filter parameters whenever voiceEffect changes!
+  useEffect(() => {
+    const ctx = audioCtxRef.current
+    const filter = filterRef.current
+    const delay = delayRef.current
+    const feedback = feedbackGainRef.current
+    const lfoGain = lfoGainRef.current
+
+    if (!ctx || !filter || !delay || !feedback || !lfoGain) return
+
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {})
+    }
+
+    // Reset defaults
+    lfoGain.gain.value = 0
+    delay.delayTime.value = 0
+    feedback.gain.value = 0
+
+    if (!voiceEffect) {
+      filter.type = 'allpass'
+      filter.frequency.value = 350
+      filter.Q.value = 1
+    } else if (voiceEffect === 'bury') {
+      // Deeply muffled underground voice (debaixo da terra)
+      filter.type = 'lowpass'
+      filter.frequency.value = 280
+      filter.Q.value = 2.5
+    } else if (voiceEffect === 'coffin') {
+      // Hollow wooden coffin box resonance
+      filter.type = 'bandpass'
+      filter.frequency.value = 520
+      filter.Q.value = 4.0
+      delay.delayTime.value = 0.045
+      feedback.gain.value = 0.35
+    } else if (voiceEffect === 'reaper') {
+      // Spooky ghost echo from the afterlife
+      filter.type = 'highpass'
+      filter.frequency.value = 650
+      filter.Q.value = 1.8
+      delay.delayTime.value = 0.22
+      feedback.gain.value = 0.55
+    } else if (voiceEffect === 'water') {
+      // Underwater bubbling voice
+      filter.type = 'lowpass'
+      filter.frequency.value = 480
+      filter.Q.value = 6.0
+      lfoGain.gain.value = 320
+    }
+  }, [voiceEffect])
+
   useEffect(() => {
     if (audioRef.current) {
-      audioRef.current.volume = Math.min(Math.max(volume, 0), 1)
+      audioRef.current.volume = muted ? 0 : Math.min(Math.max(volume, 0), 1)
     }
-  }, [volume])
+  }, [volume, muted])
 
   return <audio ref={audioRef} autoPlay playsInline muted={muted} className="hidden" />
 }
@@ -94,13 +213,13 @@ export function CommunityHub() {
   const [user, setUser] = useState<UserProfile | null>(null)
   const [loadingAuth, setLoadingAuth] = useState(true)
 
-  // Channels & Roles state
+  // Channels & Multi-Roles state
   const [channels, setChannels] = useState<Room[]>(FALLBACK_CHANNELS)
   const [roles, setRoles] = useState<Role[]>(FALLBACK_ROLES)
-  const [memberRoles, setMemberRoles] = useState<Record<string, string | null>>({})
+  const [memberRoles, setMemberRoles] = useState<Record<string, string[]>>({})
   const [allMembers, setAllMembers] = useState<UserProfile[]>([])
 
-  // Global presence map: who is online across the entire server & which voice room they are in
+  // Global presence map
   const [globalVoicePresence, setGlobalVoicePresence] = useState<Record<string, UserProfile>>({})
 
   // Active Text Channel vs Active Voice Channel
@@ -109,6 +228,11 @@ export function CommunityHub() {
 
   // Unread messages badge map
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({})
+
+  // Active 15-second voice effects per user when pranked: { [userId]: { type, expiresAt } }
+  const [userVoiceEffects, setUserVoiceEffects] = useState<
+    Record<string, { type: PrankType; expiresAt: number }>
+  >({})
 
   // Stream, Watch Together & UI Controls
   const [resolution, setResolution] = useState<ScreenShareOptions['resolution']>('1080p')
@@ -163,6 +287,7 @@ export function CommunityHub() {
           username: profile.username,
           avatar_url: profile.avatar_url,
           role_id: 'seco-raiz',
+          role_ids: ['seco-raiz'],
           joined_at: nowIso,
           last_seen_at: nowIso,
           updated_at: nowIso,
@@ -244,14 +369,40 @@ export function CommunityHub() {
     toggleDeafen,
   } = useScreenShare(activeVoiceRoom?.id || '', user)
 
-  // Auto-open Watch Together view when someone starts a synchronized video in the room
+  // Whenever a prank happens, apply a 15-second voice filter to the target user!
+  useEffect(() => {
+    if (!activePrank) return
+    const targetId = activePrank.targetUser.id
+    const expiresAt = Date.now() + 15000
+
+    setUserVoiceEffects((prev) => ({
+      ...prev,
+      [targetId]: { type: activePrank.type, expiresAt },
+    }))
+
+    const timer = setTimeout(() => {
+      setUserVoiceEffects((prev) => {
+        const current = prev[targetId]
+        if (current && current.expiresAt <= Date.now() + 100) {
+          const copy = { ...prev }
+          delete copy[targetId]
+          return copy
+        }
+        return prev
+      })
+    }, 15000)
+
+    return () => clearTimeout(timer)
+  }, [activePrank])
+
+  // Auto-open Watch Together view when someone starts a synchronized video
   useEffect(() => {
     if (watchState?.active) {
       setShowWatchTogether(true)
     }
   }, [watchState?.active])
 
-  // Global Presence Channel: Tracks which voice channel EVERY online user is connected to!
+  // Global Presence Channel
   useEffect(() => {
     if (!user) return
     const supabase = createClient()
@@ -292,7 +443,6 @@ export function CommunityHub() {
     }
   }, [user?.id])
 
-  // Keep global presence updated whenever user switches voice channel or toggles mic/deafen/screen
   useEffect(() => {
     if (!user || !globalPresenceChannelRef.current) return
     globalPresenceChannelRef.current.track({
@@ -307,6 +457,20 @@ export function CommunityHub() {
   // Load Channels, Roles, User Profiles & Subscribe to Unread Messages
   useEffect(() => {
     const supabase = createClient()
+
+    const parseMemberRolesMap = (profiles: UserProfile[]) => {
+      const map: Record<string, string[]> = {}
+      profiles.forEach((p) => {
+        if (Array.isArray(p.role_ids) && p.role_ids.length > 0) {
+          map[p.id] = p.role_ids
+        } else if (p.role_id) {
+          map[p.id] = [p.role_id]
+        } else {
+          map[p.id] = ['seco-raiz']
+        }
+      })
+      return map
+    }
 
     const fetchInitialData = async () => {
       const [{ data: chData }, { data: rData }, { data: pData }] = await Promise.all([
@@ -323,11 +487,7 @@ export function CommunityHub() {
       }
       if (pData) {
         setAllMembers(pData as UserProfile[])
-        const map: Record<string, string | null> = {}
-        pData.forEach((p: UserProfile) => {
-          map[p.id] = p.role_id || 'seco-raiz'
-        })
-        setMemberRoles(map)
+        setMemberRoles(parseMemberRolesMap(pData as UserProfile[]))
       }
     }
 
@@ -371,11 +531,7 @@ export function CommunityHub() {
             .then(({ data }) => {
               if (data) {
                 setAllMembers(data as UserProfile[])
-                const map: Record<string, string | null> = {}
-                data.forEach((p: UserProfile) => {
-                  map[p.id] = p.role_id || 'seco-raiz'
-                })
-                setMemberRoles(map)
+                setMemberRoles(parseMemberRolesMap(data as UserProfile[]))
               }
             })
         }
@@ -447,7 +603,6 @@ export function CommunityHub() {
     })
   }
 
-  // IMPORTANT: When creating a new voice channel, DO NOT move/connect the user into it automatically!
   const handleCreateChannel = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newChannelName.trim() || !createChannelType) return
@@ -481,7 +636,6 @@ export function CommunityHub() {
     const supabase = createClient()
     await supabase.from('channels').insert(newRoom)
 
-    // Only switch view if it's a text channel; never auto-move user into a newly created voice channel!
     if (createdType === 'text') {
       handleSelectChannel(newRoom)
     }
@@ -518,12 +672,23 @@ export function CommunityHub() {
     await supabase.from('roles').insert(role)
   }
 
-  const handleAssignRole = async (targetUserId: string, roleId: string) => {
-    setMemberRoles((prev) => ({ ...prev, [targetUserId]: roleId }))
+  // Toggle multiple roles per member!
+  const handleToggleRole = async (targetUserId: string, roleId: string) => {
+    const currentList = memberRoles[targetUserId] || ['seco-raiz']
+    const exists = currentList.includes(roleId)
+    let nextList: string[]
+    if (exists) {
+      nextList = currentList.filter((id) => id !== roleId)
+      if (nextList.length === 0) nextList = ['seco-raiz']
+    } else {
+      nextList = [...currentList, roleId]
+    }
+
+    setMemberRoles((prev) => ({ ...prev, [targetUserId]: nextList }))
     const supabase = createClient()
     await supabase
       .from('user_profiles')
-      .update({ role_id: roleId })
+      .update({ role_ids: nextList, role_id: nextList[0] })
       .eq('id', targetUserId)
   }
 
@@ -568,9 +733,16 @@ export function CommunityHub() {
   const textChannels = channels.filter((c) => c.type === 'text')
   const voiceChannels = channels.filter((c) => c.type === 'voice')
 
-  const getRoleForUser = (userId: string): Role | undefined => {
-    const rId = memberRoles[userId] || 'seco-raiz'
-    return roles.find((r) => r.id === rId)
+  // Returns all roles assigned to a user sorted by position
+  const getRolesForUser = (userId: string): Role[] => {
+    const rIds = memberRoles[userId] || ['seco-raiz']
+    return roles
+      .filter((r) => rIds.includes(r.id))
+      .sort((a, b) => a.position - b.position)
+  }
+
+  const getPrimaryRoleForUser = (userId: string): Role | undefined => {
+    return getRolesForUser(userId)[0]
   }
 
   const getPeerMuteStatus = (peer: UserProfile) => {
@@ -616,20 +788,20 @@ export function CommunityHub() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#313338] text-[#f2f3f5]">
-      {/* 3D Humorous Prank Overlay (Enterrar na Cova, Caixão, Ceifador, Hidratar) */}
+      {/* Real Three.js 3D WebGL Prank Overlay */}
       <PrankStageOverlay
         activePrank={activePrank}
         onComplete={() => setActivePrank(null)}
       />
 
-      {/* User Profile Card Popover when clicking any member */}
+      {/* User Profile Card Popover with Multi-Roles */}
       {inspectedMember && (
         <UserProfilePopover
           member={
             allMembers.find((m) => m.id === inspectedMember.id) || inspectedMember
           }
           roles={roles}
-          currentRoleId={memberRoles[inspectedMember.id] || 'seco-raiz'}
+          currentRoleIds={memberRoles[inspectedMember.id] || ['seco-raiz']}
           isOnline={Boolean(globalVoicePresence[inspectedMember.id])}
           currentVoiceRoomName={
             voiceChannels.find(
@@ -640,23 +812,24 @@ export function CommunityHub() {
             activeVoiceRoom &&
               roomPeers.some((p) => p.id === inspectedMember.id)
           )}
-          onAssignRole={handleAssignRole}
+          onToggleRole={handleToggleRole}
           onTriggerPrank={triggerPrank}
           onClose={() => setInspectedMember(null)}
         />
       )}
 
-      {/* Hidden Audio Players */}
+      {/* Hidden Audio Players with Real-Time WebAudio Voice Filters */}
       {remoteAudios.map((item) => (
         <RemoteVoicePlayer
           key={item.peerId}
           item={item}
           muted={deafened}
           volume={soundSettings.volume}
+          voiceEffect={userVoiceEffects[item.peerId]?.type || null}
         />
       ))}
 
-      {/* LEFT SIDEBAR: Discord Server Channels (Text + Voice + Connected Users in ALL rooms) */}
+      {/* LEFT SIDEBAR: Discord Server Channels */}
       <aside className="flex w-60 shrink-0 flex-col bg-[#2b2d31] select-none">
         {/* Server Header */}
         <div className="flex h-12 items-center justify-between border-b border-[#1f2023] px-3.5">
@@ -742,7 +915,7 @@ export function CommunityHub() {
             </div>
           </div>
 
-          {/* VOICE CHANNELS SECTION (Shows users connected in ANY voice channel!) */}
+          {/* VOICE CHANNELS SECTION */}
           <div>
             <div className="mb-1 flex items-center justify-between px-2">
               <span className="text-[11px] font-bold tracking-wider text-[#949ba4] uppercase">
@@ -764,7 +937,6 @@ export function CommunityHub() {
                 const isConnectedHere = activeVoiceRoom?.id === room.id
                 const roomUnread = unreadCounts[room.id] || 0
 
-                // Show users connected in this room (either from active roomPeers or globalVoicePresence for OTHER rooms)
                 const usersInThisVoiceRoom = isConnectedHere
                   ? roomPeers
                   : Object.values(globalVoicePresence).filter(
@@ -821,7 +993,7 @@ export function CommunityHub() {
                             (isConnectedHere &&
                               ((peer.id === user?.id && isSharing) ||
                                 remoteStreams.some((s) => s.peerId === peer.id)))
-                          const peerRole = getRoleForUser(peer.id)
+                          const peerRole = getPrimaryRoleForUser(peer.id)
                           const muteInfo = getPeerMuteStatus(peer)
 
                           return (
@@ -932,7 +1104,7 @@ export function CommunityHub() {
           </div>
         )}
 
-        {/* Discord Bottom User Profile Bar with Real Mic/Headphone Icons */}
+        {/* Discord Bottom User Profile Bar */}
         {user && (
           <div className="flex items-center justify-between bg-[#1e1f22] px-2.5 py-2">
             <div
@@ -948,13 +1120,15 @@ export function CommunityHub() {
               />
               <div className="min-w-0">
                 <div
-                  style={{ color: getRoleForUser(user.id)?.color || '#ffffff' }}
+                  style={{ color: getPrimaryRoleForUser(user.id)?.color || '#ffffff' }}
                   className="truncate text-xs font-bold"
                 >
                   {user.username}
                 </div>
                 <div className="truncate text-[10px] text-[#949ba4]">
-                  {getRoleForUser(user.id)?.name || 'Online'}
+                  {getRolesForUser(user.id)
+                    .map((r) => r.name)
+                    .join(' • ') || 'Online'}
                 </div>
               </div>
             </div>
@@ -998,7 +1172,7 @@ export function CommunityHub() {
         )}
       </aside>
 
-      {/* CENTER AREA: Full Text Channel View OR Voice/Stream/WatchTogether Stage */}
+      {/* CENTER AREA */}
       <div className="flex flex-1 flex-col overflow-hidden bg-[#1e1f22]">
         {/* Top Header */}
         <header className="relative flex h-12 shrink-0 items-center justify-between border-b border-[#1f2023] bg-[#2b2d31] px-4">
@@ -1069,7 +1243,6 @@ export function CommunityHub() {
               </select>
             </div>
 
-            {/* Watch Together Toggle */}
             {selectedChannel.type === 'voice' && activeVoiceRoom && (
               <button
                 type="button"
@@ -1239,7 +1412,7 @@ export function CommunityHub() {
           </div>
         )}
 
-        {/* BODY: Either Text Channel View OR Voice Stage View */}
+        {/* BODY */}
         {selectedChannel.type === 'text' ? (
           user && (
             <ChatPanel
@@ -1270,20 +1443,35 @@ export function CommunityHub() {
                   {roomPeers.map((peer) => {
                     const talking =
                       peer.id === user?.id ? isSpeaking : Boolean(speakingPeers[peer.id])
-                    const peerRole = getRoleForUser(peer.id)
+                    const userRoleList = getRolesForUser(peer.id)
+                    const primaryRole = userRoleList[0]
                     const muteInfo = getPeerMuteStatus(peer)
+                    const activeVoiceFx = userVoiceEffects[peer.id]?.type
 
                     return (
                       <div
                         key={peer.id}
                         onClick={() => setInspectedMember(peer)}
-                        className={`group relative flex h-52 w-76 cursor-pointer flex-col items-center justify-center rounded-xl bg-[#2b2d31] p-4 shadow-md transition sm:h-56 sm:w-80 ${
+                        className={`group relative flex h-56 w-80 cursor-pointer flex-col items-center justify-center rounded-xl bg-[#2b2d31] p-4 shadow-md transition ${
                           talking
                             ? 'ring-2 ring-[#23a55a]'
                             : 'border border-[#232428] hover:border-[#3f4147]'
                         }`}
                       >
-                        {/* Top-Right Status Icons (Muted / Deafened like Discord) */}
+                        {/* Top-Left Active Voice Filter Badge */}
+                        {activeVoiceFx && (
+                          <div className="absolute top-2.5 left-2.5 flex items-center gap-1 rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-extrabold text-amber-300 ring-1 ring-amber-500/40">
+                            <PrankIcon type={activeVoiceFx} className="h-3 w-3" />
+                            <span>
+                              {activeVoiceFx === 'bury' && 'Soterrado'}
+                              {activeVoiceFx === 'coffin' && 'No Caixão'}
+                              {activeVoiceFx === 'reaper' && 'Voz do Além'}
+                              {activeVoiceFx === 'water' && 'Afogado'}
+                            </span>
+                          </div>
+                        )}
+
+                        {/* Top-Right Status Icons */}
                         <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5">
                           {muteInfo.isMuted && (
                             <span
@@ -1311,38 +1499,44 @@ export function CommunityHub() {
                           }`}
                         />
                         <span
-                          style={{ color: peerRole?.color || '#ffffff' }}
+                          style={{ color: primaryRole?.color || '#ffffff' }}
                           className="mt-2.5 text-sm font-bold"
                         >
                           {peer.username}
                         </span>
-                        {peerRole && (
-                          <span
-                            style={{
-                              backgroundColor: `${peerRole.color}22`,
-                              color: peerRole.color,
-                              borderColor: `${peerRole.color}55`,
-                            }}
-                            className="mt-0.5 rounded border px-2 py-0.5 text-[10px] font-bold"
-                          >
-                            {peerRole.name}
-                          </span>
-                        )}
 
-                        {/* Quick Humorous Prank Buttons on Card Hover */}
+                        {/* Multi-Role Badges */}
+                        <div className="mt-1 flex flex-wrap justify-center gap-1">
+                          {userRoleList.map((r) => (
+                            <span
+                              key={r.id}
+                              style={{
+                                backgroundColor: `${r.color}22`,
+                                color: r.color,
+                                borderColor: `${r.color}55`,
+                              }}
+                              className="rounded border px-1.5 py-0.2 text-[9px] font-bold"
+                            >
+                              {r.name}
+                            </span>
+                          ))}
+                        </div>
+
+                        {/* Custom SVG 3D Prank Action Buttons (Always visible on Windows!) */}
                         <div
                           onClick={(e) => e.stopPropagation()}
-                          className="mt-2.5 flex items-center gap-1 opacity-85 transition group-hover:opacity-100"
+                          className="mt-3 flex items-center gap-1.5"
                         >
                           {PRANK_OPTIONS.map((prank) => (
                             <button
                               key={prank.type}
                               type="button"
                               onClick={() => triggerPrank(prank.type, peer)}
-                              title={prank.label}
-                              className="cursor-pointer rounded bg-[#1e1f22] px-2 py-1 text-[10px] font-bold text-zinc-200 hover:bg-[#35373c] hover:text-amber-400"
+                              title={`${prank.label} (${prank.voiceEffectLabel})`}
+                              className="flex cursor-pointer items-center gap-1 rounded-md border border-white/10 bg-[#1e1f22] px-2 py-1 text-[10px] font-bold text-zinc-200 transition hover:border-amber-400/50 hover:bg-[#35373c] hover:text-amber-300"
                             >
-                              {prank.emoji}
+                              <PrankIcon type={prank.type} className="h-3.5 w-3.5 text-amber-400" />
+                              <span>{prank.shortLabel}</span>
                             </button>
                           ))}
                         </div>
@@ -1375,7 +1569,7 @@ export function CommunityHub() {
                     {roomPeers.map((peer) => {
                       const talking =
                         peer.id === user?.id ? isSpeaking : Boolean(speakingPeers[peer.id])
-                      const peerRole = getRoleForUser(peer.id)
+                      const peerRole = getPrimaryRoleForUser(peer.id)
                       const muteInfo = getPeerMuteStatus(peer)
                       return (
                         <div
@@ -1426,7 +1620,7 @@ export function CommunityHub() {
               )}
             </div>
 
-            {/* Bottom Discord Call Control Bar with Icons */}
+            {/* Bottom Discord Call Control Bar */}
             <div className="flex h-16 shrink-0 flex-wrap items-center justify-center gap-2 border-t border-[#111214] bg-[#232428] px-4">
               <button
                 type="button"
@@ -1538,13 +1732,14 @@ export function CommunityHub() {
         />
       )}
 
-      {/* RIGHT DISCORD MEMBERS LIST BY ROLE (Clickable to view profile, join date, last seen, roles & pranks) */}
+      {/* RIGHT DISCORD MEMBERS LIST GROUPED BY HIGHEST ROLE */}
       {showMembersSidebar && (
         <aside className="hidden w-64 shrink-0 flex-col border-l border-[#1f2023] bg-[#2b2d31] p-3 overflow-y-auto xl:flex">
           {roles.map((role) => {
-            const roleMembers = allMembers.filter(
-              (m) => (memberRoles[m.id] || 'seco-raiz') === role.id
-            )
+            const roleMembers = allMembers.filter((m) => {
+              const primary = getPrimaryRoleForUser(m.id)
+              return (primary?.id || 'seco-raiz') === role.id
+            })
             if (roleMembers.length === 0) return null
 
             return (
@@ -1559,6 +1754,7 @@ export function CommunityHub() {
                     const memberVoiceRoom = voiceChannels.find(
                       (v) => v.id === onlineInfo?.voice_room_id
                     )
+                    const userAllRoles = getRolesForUser(m.id)
 
                     return (
                       <div
@@ -1580,11 +1776,18 @@ export function CommunityHub() {
                             />
                           </div>
                           <div className="min-w-0">
-                            <div
-                              style={{ color: role.color }}
-                              className="truncate text-xs font-bold"
-                            >
-                              {m.username}
+                            <div className="flex items-center gap-1">
+                              <span
+                                style={{ color: role.color }}
+                                className="truncate text-xs font-bold"
+                              >
+                                {m.username}
+                              </span>
+                              {userAllRoles.length > 1 && (
+                                <span className="rounded bg-[#1e1f22] px-1 py-0.2 text-[9px] font-bold text-zinc-400">
+                                  +{userAllRoles.length - 1}
+                                </span>
+                              )}
                             </div>
                             <div className="truncate text-[10px] text-[#949ba4]">
                               {memberVoiceRoom
@@ -1671,17 +1874,17 @@ export function CommunityHub() {
         </div>
       )}
 
-      {/* MODAL: Manage Roles (Cargos) */}
+      {/* MODAL: Manage Multi-Roles (Cargos) */}
       {showRolesModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-lg border border-[#1f2023] bg-[#313338] p-5 shadow-2xl">
+          <div className="flex max-h-[85vh] w-full max-w-xl flex-col rounded-lg border border-[#1f2023] bg-[#313338] p-5 shadow-2xl">
             <div className="flex items-center justify-between border-b border-[#1f2023] pb-3">
               <div>
                 <h3 className="text-base font-bold text-white">
                   Cargos da Comunidade • Os Secos
                 </h3>
                 <p className="text-xs text-[#949ba4]">
-                  Crie cargos coloridos e escolha o cargo de cada membro igual ao Discord.
+                  Crie cargos coloridos e selecione vários cargos para cada membro.
                 </p>
               </div>
               <button
@@ -1723,43 +1926,57 @@ export function CommunityHub() {
 
               <div>
                 <div className="mb-2 text-xs font-bold text-[#b5bac1] uppercase">
-                  Membros e Cargos ({allMembers.length})
+                  Membros e Múltiplos Cargos ({allMembers.length})
                 </div>
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   {allMembers.map((m) => {
-                    const currentRoleId = memberRoles[m.id] || 'seco-raiz'
-                    const roleObj = roles.find((r) => r.id === currentRoleId)
+                    const currentRoleIds = memberRoles[m.id] || ['seco-raiz']
+                    const primaryRole = getPrimaryRoleForUser(m.id)
 
                     return (
                       <div
                         key={m.id}
-                        className="flex items-center justify-between rounded bg-[#2b2d31] px-3 py-2"
+                        className="flex flex-col gap-2 rounded bg-[#2b2d31] p-3"
                       >
-                        <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="flex items-center gap-2.5">
                           <img
                             src={m.avatar_url}
                             alt={m.username}
                             className="h-7 w-7 rounded-full object-cover"
                           />
                           <span
-                            style={{ color: roleObj?.color || '#ffffff' }}
-                            className="truncate text-xs font-bold"
+                            style={{ color: primaryRole?.color || '#ffffff' }}
+                            className="text-xs font-bold"
                           >
                             {m.username}
                           </span>
                         </div>
 
-                        <select
-                          value={currentRoleId}
-                          onChange={(e) => handleAssignRole(m.id, e.target.value)}
-                          className="cursor-pointer rounded bg-[#1e1f22] px-2.5 py-1 text-xs font-semibold text-white focus:outline-none"
-                        >
-                          {roles.map((r) => (
-                            <option key={r.id} value={r.id} className="bg-[#1e1f22]">
-                              {r.name}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="flex flex-wrap gap-1.5">
+                          {roles.map((r) => {
+                            const active = currentRoleIds.includes(r.id)
+                            return (
+                              <button
+                                key={r.id}
+                                type="button"
+                                onClick={() => handleToggleRole(m.id, r.id)}
+                                style={{
+                                  backgroundColor: active ? `${r.color}30` : '#1e1f22',
+                                  borderColor: active ? r.color : '#111214',
+                                  color: active ? '#ffffff' : '#949ba4',
+                                }}
+                                className="flex cursor-pointer items-center gap-1 rounded border px-2 py-1 text-[10px] font-bold transition"
+                              >
+                                <span
+                                  style={{ backgroundColor: r.color }}
+                                  className="h-2 w-2 rounded-full"
+                                />
+                                <span>{r.name}</span>
+                                {active && <span className="text-emerald-400">✓</span>}
+                              </button>
+                            )
+                          })}
+                        </div>
                       </div>
                     )
                   })}
