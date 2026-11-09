@@ -52,6 +52,15 @@ export interface PrankEvent {
   timestamp: number
 }
 
+export type CinemaModelType =
+  | 'anime-vrm'
+  | 'streetwear-rpm'
+  | 'dancer-girl'
+  | 'soldier-tactical'
+  | 'cyborg-xbot'
+  | 'robot-bot'
+  | 'custom-url'
+
 export type CinemaPresetId =
   | 'custom'
   | 'goku'
@@ -104,6 +113,8 @@ export type CinemaEmoteType = 'none' | 'wave' | 'dance' | 'cheer' | 'popcorn'
 
 export interface CinemaAvatarConfig {
   presetId: CinemaPresetId
+  modelType?: CinemaModelType
+  customModelUrl?: string
   shirtColor: string
   pantsColor: string
   hairStyle: CinemaHairStyle
