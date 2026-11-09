@@ -95,8 +95,13 @@ create table if not exists public.user_profiles (
   username text not null,
   avatar_url text not null,
   role_id text references public.roles(id) on delete set null default 'seco-raiz',
+  joined_at timestamptz not null default now(),
+  last_seen_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.user_profiles add column if not exists joined_at timestamptz not null default now();
+alter table public.user_profiles add column if not exists last_seen_at timestamptz not null default now();
 
 alter table public.user_profiles enable row level security;
 

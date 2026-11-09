@@ -35,19 +35,28 @@ export function VideoStage({
 
     const ensurePlay = () => {
       videoEl.play().catch(() => {
-        // Fallback if browser requires muted playback first
+        // Fallback: if browser blocks autoplay with audio, start muted so video never stays black
+        videoEl.muted = true
+        setMuted(true)
+        videoEl.play().catch(() => {})
       })
     }
 
     ensurePlay()
 
-    // Recover automatically if track unmutes or pauses
+    const handleLoadedMetadata = () => {
+      ensurePlay()
+    }
+
+    videoEl.addEventListener('loadedmetadata', handleLoadedMetadata)
+
     const tracks = stream.getVideoTracks()
     tracks.forEach((t) => {
       t.onunmute = ensurePlay
     })
 
     return () => {
+      videoEl.removeEventListener('loadedmetadata', handleLoadedMetadata)
       tracks.forEach((t) => {
         t.onunmute = null
       })
@@ -100,7 +109,7 @@ export function VideoStage({
       className="group relative flex h-full w-full flex-col overflow-hidden rounded-lg border border-[#232428] bg-black"
     >
       {/* Top Overlay Header (Discord Stream Style) */}
-      <div className="absolute top-2.5 left-2.5 right-2.5 z-10 flex items-center justify-between pointer-events-none">
+      <div className="pointer-events-none absolute top-2.5 right-2.5 left-2.5 z-10 flex items-center justify-between">
         <div className="flex items-center gap-2 rounded-md bg-[#111214]/85 px-2.5 py-1 backdrop-blur-sm">
           <img
             src={user.avatar_url}

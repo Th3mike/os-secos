@@ -1,10 +1,14 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
+import { Mic, MicOff, Headphones, HeadphoneOff, Tv } from 'lucide-react'
 import { Room, UserProfile, Role, ChatMessage } from '@/types/community'
 import { useScreenShare, ScreenShareOptions, RemoteAudioItem } from '@/hooks/useScreenShare'
 import { VideoStage } from './VideoStage'
 import { ChatPanel } from './ChatPanel'
+import { PrankStageOverlay, PRANK_OPTIONS } from './PrankStageOverlay'
+import { WatchTogetherStage } from './WatchTogetherStage'
+import { UserProfilePopover, formatRelativeTime } from './UserProfilePopover'
 import {
   SoundSettings,
   DEFAULT_SOUND_SETTINGS,
@@ -13,7 +17,7 @@ import {
   playRoomEventSound,
 } from '@/lib/soundEngine'
 import { createClient } from '@/lib/supabase/client'
-import type { User } from '@supabase/supabase-js'
+import type { User, RealtimeChannel } from '@supabase/supabase-js'
 
 const FALLBACK_CHANNELS: Room[] = [
   { id: 'chat-geral', name: 'chat-geral', description: 'Chat principal da comunidade', type: 'text', position: 1 },
@@ -96,22 +100,29 @@ export function CommunityHub() {
   const [memberRoles, setMemberRoles] = useState<Record<string, string | null>>({})
   const [allMembers, setAllMembers] = useState<UserProfile[]>([])
 
-  // Active Text Channel vs Active Voice Channel (null = disconnected from voice, like Discord)
+  // Global presence map: who is online across the entire server & which voice room they are in
+  const [globalVoicePresence, setGlobalVoicePresence] = useState<Record<string, UserProfile>>({})
+
+  // Active Text Channel vs Active Voice Channel
   const [selectedChannel, setSelectedChannel] = useState<Room>(FALLBACK_CHANNELS[2])
   const [activeVoiceRoom, setActiveVoiceRoom] = useState<Room | null>(FALLBACK_CHANNELS[2])
 
-  // Unread messages badge map: { [channelId]: count }
+  // Unread messages badge map
   const [unreadCounts, setUnreadCounts] = useState<Record<string, number>>({})
 
-  // Stream & UI Controls
+  // Stream, Watch Together & UI Controls
   const [resolution, setResolution] = useState<ScreenShareOptions['resolution']>('1080p')
   const [fps, setFps] = useState<ScreenShareOptions['fps']>(60)
   const [soundSettings, setSoundSettings] = useState<SoundSettings>(DEFAULT_SOUND_SETTINGS)
   const [showAudioConfig, setShowAudioConfig] = useState(false)
   const [voiceChatOpen, setVoiceChatOpen] = useState(false)
   const [showMembersSidebar, setShowMembersSidebar] = useState(true)
+  const [showWatchTogether, setShowWatchTogether] = useState(false)
   const [focusedStreamId, setFocusedStreamId] = useState<string | null>(null)
   const [stageHeightPct, setStageHeightPct] = useState<number>(75)
+
+  // Selected Member for Profile Popover
+  const [inspectedMember, setInspectedMember] = useState<UserProfile | null>(null)
 
   // Modals for Creating Channels & Managing Roles
   const [createChannelType, setCreateChannelType] = useState<'text' | 'voice' | null>(null)
@@ -123,6 +134,7 @@ export function CommunityHub() {
 
   const selectedChannelRef = useRef<Room>(selectedChannel)
   const voiceChatOpenRef = useRef<boolean>(voiceChatOpen)
+  const globalPresenceChannelRef = useRef<RealtimeChannel | null>(null)
 
   useEffect(() => {
     selectedChannelRef.current = selectedChannel
@@ -138,6 +150,7 @@ export function CommunityHub() {
     const supabase = createClient()
 
     const syncUserToDb = async (profile: UserProfile) => {
+      const nowIso = new Date().toISOString()
       const { data: existing } = await supabase
         .from('user_profiles')
         .select('*')
@@ -150,6 +163,9 @@ export function CommunityHub() {
           username: profile.username,
           avatar_url: profile.avatar_url,
           role_id: 'seco-raiz',
+          joined_at: nowIso,
+          last_seen_at: nowIso,
+          updated_at: nowIso,
         })
       } else {
         await supabase
@@ -157,7 +173,8 @@ export function CommunityHub() {
           .update({
             username: profile.username,
             avatar_url: profile.avatar_url,
-            updated_at: new Date().toISOString(),
+            last_seen_at: nowIso,
+            updated_at: nowIso,
           })
           .eq('id', profile.id)
       }
@@ -189,6 +206,103 @@ export function CommunityHub() {
       subscription.unsubscribe()
     }
   }, [])
+
+  // Heartbeat to update last_seen_at every 2 minutes
+  useEffect(() => {
+    if (!user) return
+    const supabase = createClient()
+    const timer = setInterval(() => {
+      supabase
+        .from('user_profiles')
+        .update({ last_seen_at: new Date().toISOString() })
+        .eq('id', user.id)
+        .then(() => {})
+    }, 120000)
+    return () => clearInterval(timer)
+  }, [user])
+
+  const {
+    localStream,
+    isSharing,
+    remoteStreams,
+    remoteAudios,
+    roomPeers,
+    micEnabled,
+    deafened,
+    isSpeaking,
+    speakingPeers,
+    peerMuteStates,
+    activePrank,
+    setActivePrank,
+    watchState,
+    updateWatchTogether,
+    triggerPrank,
+    error,
+    startScreenShare,
+    stopScreenShare,
+    toggleMic,
+    toggleDeafen,
+  } = useScreenShare(activeVoiceRoom?.id || '', user)
+
+  // Auto-open Watch Together view when someone starts a synchronized video in the room
+  useEffect(() => {
+    if (watchState?.active) {
+      setShowWatchTogether(true)
+    }
+  }, [watchState?.active])
+
+  // Global Presence Channel: Tracks which voice channel EVERY online user is connected to!
+  useEffect(() => {
+    if (!user) return
+    const supabase = createClient()
+    const channel = supabase.channel('os-secos-global-presence', {
+      config: {
+        presence: { key: user.id },
+      },
+    })
+
+    channel
+      .on('presence', { event: 'sync' }, () => {
+        const state = channel.presenceState<UserProfile>()
+        const map: Record<string, UserProfile> = {}
+        Object.values(state).forEach((presences) => {
+          if (presences[0]) {
+            map[presences[0].id] = presences[0]
+          }
+        })
+        setGlobalVoicePresence(map)
+      })
+      .subscribe(async (status) => {
+        if (status === 'SUBSCRIBED') {
+          await channel.track({
+            ...user,
+            voice_room_id: activeVoiceRoom?.id || null,
+            isMuted: !micEnabled,
+            isDeafened: deafened,
+            status: isSharing ? 'streaming' : 'online',
+          })
+        }
+      })
+
+    globalPresenceChannelRef.current = channel
+
+    return () => {
+      supabase.removeChannel(channel)
+      globalPresenceChannelRef.current = null
+    }
+  }, [user?.id])
+
+  // Keep global presence updated whenever user switches voice channel or toggles mic/deafen/screen
+  useEffect(() => {
+    if (!user || !globalPresenceChannelRef.current) return
+    globalPresenceChannelRef.current.track({
+      ...user,
+      voice_room_id: activeVoiceRoom?.id || null,
+      isMuted: !micEnabled,
+      isDeafened: deafened,
+      status: isSharing ? 'streaming' : 'online',
+    })
+  }, [user, activeVoiceRoom?.id, micEnabled, deafened, isSharing])
 
   // Load Channels, Roles, User Profiles & Subscribe to Unread Messages
   useEffect(() => {
@@ -315,7 +429,6 @@ export function CommunityHub() {
     playRoomEventSound('user-leave', soundSettings)
     setActiveVoiceRoom(null)
     setVoiceChatOpen(false)
-    // Switch view to first text channel when disconnecting from call
     const firstText = channels.find((c) => c.type === 'text')
     if (firstText) {
       setSelectedChannel(firstText)
@@ -334,6 +447,7 @@ export function CommunityHub() {
     })
   }
 
+  // IMPORTANT: When creating a new voice channel, DO NOT move/connect the user into it automatically!
   const handleCreateChannel = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newChannelName.trim() || !createChannelType) return
@@ -358,6 +472,7 @@ export function CommunityHub() {
       created_by: user?.id,
     }
 
+    const createdType = createChannelType
     setChannels((prev) => [...prev, newRoom])
     setCreateChannelType(null)
     setNewChannelName('')
@@ -365,7 +480,11 @@ export function CommunityHub() {
 
     const supabase = createClient()
     await supabase.from('channels').insert(newRoom)
-    handleSelectChannel(newRoom)
+
+    // Only switch view if it's a text channel; never auto-move user into a newly created voice channel!
+    if (createdType === 'text') {
+      handleSelectChannel(newRoom)
+    }
   }
 
   const handleDeleteChannel = async (chId: string, e: React.MouseEvent) => {
@@ -432,23 +551,6 @@ export function CommunityHub() {
     setUser(null)
   }
 
-  const {
-    localStream,
-    isSharing,
-    remoteStreams,
-    remoteAudios,
-    roomPeers,
-    micEnabled,
-    deafened,
-    isSpeaking,
-    speakingPeers,
-    error,
-    startScreenShare,
-    stopScreenShare,
-    toggleMic,
-    toggleDeafen,
-  } = useScreenShare(activeVoiceRoom?.id || '', user)
-
   const allStreams = [
     ...(localStream && user ? [{ id: 'local', user, stream: localStream, isLocal: true }] : []),
     ...remoteStreams.map((r) => ({
@@ -471,7 +573,19 @@ export function CommunityHub() {
     return roles.find((r) => r.id === rId)
   }
 
-  // Login Screen
+  const getPeerMuteStatus = (peer: UserProfile) => {
+    if (peer.id === user?.id) {
+      return { isMuted: !micEnabled, isDeafened: deafened }
+    }
+    const fromSignal = peerMuteStates[peer.id]
+    if (fromSignal) return fromSignal
+    const fromGlobal = globalVoicePresence[peer.id]
+    return {
+      isMuted: peer.isMuted ?? fromGlobal?.isMuted ?? true,
+      isDeafened: peer.isDeafened ?? fromGlobal?.isDeafened ?? false,
+    }
+  }
+
   if (!loadingAuth && !user) {
     return (
       <div className="flex min-h-screen w-full items-center justify-center bg-[#1e1f22] p-4">
@@ -502,6 +616,36 @@ export function CommunityHub() {
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#313338] text-[#f2f3f5]">
+      {/* 3D Humorous Prank Overlay (Enterrar na Cova, Caixão, Ceifador, Hidratar) */}
+      <PrankStageOverlay
+        activePrank={activePrank}
+        onComplete={() => setActivePrank(null)}
+      />
+
+      {/* User Profile Card Popover when clicking any member */}
+      {inspectedMember && (
+        <UserProfilePopover
+          member={
+            allMembers.find((m) => m.id === inspectedMember.id) || inspectedMember
+          }
+          roles={roles}
+          currentRoleId={memberRoles[inspectedMember.id] || 'seco-raiz'}
+          isOnline={Boolean(globalVoicePresence[inspectedMember.id])}
+          currentVoiceRoomName={
+            voiceChannels.find(
+              (v) => v.id === globalVoicePresence[inspectedMember.id]?.voice_room_id
+            )?.name || null
+          }
+          canPrank={Boolean(
+            activeVoiceRoom &&
+              roomPeers.some((p) => p.id === inspectedMember.id)
+          )}
+          onAssignRole={handleAssignRole}
+          onTriggerPrank={triggerPrank}
+          onClose={() => setInspectedMember(null)}
+        />
+      )}
+
       {/* Hidden Audio Players */}
       {remoteAudios.map((item) => (
         <RemoteVoicePlayer
@@ -512,7 +656,7 @@ export function CommunityHub() {
         />
       ))}
 
-      {/* LEFT SIDEBAR: Discord Server Channels (Text + Voice + Connected Users) */}
+      {/* LEFT SIDEBAR: Discord Server Channels (Text + Voice + Connected Users in ALL rooms) */}
       <aside className="flex w-60 shrink-0 flex-col bg-[#2b2d31] select-none">
         {/* Server Header */}
         <div className="flex h-12 items-center justify-between border-b border-[#1f2023] px-3.5">
@@ -598,7 +742,7 @@ export function CommunityHub() {
             </div>
           </div>
 
-          {/* VOICE CHANNELS SECTION */}
+          {/* VOICE CHANNELS SECTION (Shows users connected in ANY voice channel!) */}
           <div>
             <div className="mb-1 flex items-center justify-between px-2">
               <span className="text-[11px] font-bold tracking-wider text-[#949ba4] uppercase">
@@ -620,6 +764,13 @@ export function CommunityHub() {
                 const isConnectedHere = activeVoiceRoom?.id === room.id
                 const roomUnread = unreadCounts[room.id] || 0
 
+                // Show users connected in this room (either from active roomPeers or globalVoicePresence for OTHER rooms)
+                const usersInThisVoiceRoom = isConnectedHere
+                  ? roomPeers
+                  : Object.values(globalVoicePresence).filter(
+                      (p) => p.voice_room_id === room.id
+                    )
+
                 return (
                   <div key={room.id}>
                     <div
@@ -638,9 +789,9 @@ export function CommunityHub() {
                             {roomUnread}
                           </span>
                         )}
-                        {isConnectedHere && (
+                        {usersInThisVoiceRoom.length > 0 && (
                           <span className="rounded bg-[#232428] px-1.5 py-0.5 text-[10px] text-[#b5bac1]">
-                            {roomPeers.length}
+                            {usersInThisVoiceRoom.length}
                           </span>
                         )}
                         {voiceChannels.length > 1 && (
@@ -656,31 +807,27 @@ export function CommunityHub() {
                       </div>
                     </div>
 
-                    {/* Connected Users Indented Below Active Voice Channel */}
-                    {isConnectedHere && roomPeers.length > 0 && (
+                    {/* Connected Users Indented Below ANY Voice Channel */}
+                    {usersInThisVoiceRoom.length > 0 && (
                       <div className="mt-1 ml-4 space-y-0.5 border-l border-[#3f4147] pl-2">
-                        {roomPeers.map((peer) => {
+                        {usersInThisVoiceRoom.map((peer) => {
                           const talking =
-                            peer.id === user?.id
+                            isConnectedHere &&
+                            (peer.id === user?.id
                               ? isSpeaking
-                              : Boolean(speakingPeers[peer.id])
+                              : Boolean(speakingPeers[peer.id]))
                           const streaming =
                             peer.status === 'streaming' ||
-                            (peer.id === user?.id && isSharing) ||
-                            remoteStreams.some((s) => s.peerId === peer.id)
+                            (isConnectedHere &&
+                              ((peer.id === user?.id && isSharing) ||
+                                remoteStreams.some((s) => s.peerId === peer.id)))
                           const peerRole = getRoleForUser(peer.id)
+                          const muteInfo = getPeerMuteStatus(peer)
 
                           return (
                             <div
                               key={peer.id}
-                              onClick={() => {
-                                setSelectedChannel(room)
-                                if (streaming) {
-                                  setFocusedStreamId(
-                                    peer.id === user?.id ? 'local' : peer.id
-                                  )
-                                }
-                              }}
+                              onClick={() => setInspectedMember(peer)}
                               className="flex cursor-pointer items-center justify-between rounded px-2 py-1 hover:bg-[#35373c]"
                             >
                               <div className="flex items-center gap-2 min-w-0">
@@ -705,11 +852,24 @@ export function CommunityHub() {
                                 </span>
                               </div>
 
-                              {streaming && (
-                                <span className="shrink-0 rounded bg-[#da373c] px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-white uppercase">
-                                  AO VIVO
-                                </span>
-                              )}
+                              {/* Right Icons: Mic Off, Deafen Off, AO VIVO */}
+                              <div className="flex shrink-0 items-center gap-1">
+                                {muteInfo.isMuted && (
+                                  <span title="Microfone Mutado">
+                                    <MicOff className="h-3.5 w-3.5 text-[#da373c]" />
+                                  </span>
+                                )}
+                                {muteInfo.isDeafened && (
+                                  <span title="Áudio Desativado">
+                                    <HeadphoneOff className="h-3.5 w-3.5 text-[#da373c]" />
+                                  </span>
+                                )}
+                                {streaming && (
+                                  <span className="rounded bg-[#da373c] px-1.5 py-0.5 text-[9px] font-bold tracking-wide text-white uppercase">
+                                    AO VIVO
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           )
                         })}
@@ -722,7 +882,7 @@ export function CommunityHub() {
           </div>
         </div>
 
-        {/* Discord Voice Connected Status Panel (only shown when connected to a voice room) */}
+        {/* Discord Voice Connected Status Panel */}
         {activeVoiceRoom && (
           <div className="border-t border-[#1f2023] bg-[#232428] px-3 py-2">
             <div className="flex items-center justify-between gap-1">
@@ -742,6 +902,7 @@ export function CommunityHub() {
                     type="button"
                     onClick={() => {
                       setSelectedChannel(activeVoiceRoom)
+                      setShowWatchTogether(false)
                       startScreenShare({ resolution, fps, includeAudio: true })
                     }}
                     className="cursor-pointer rounded bg-[#2b2d31] px-2 py-1 text-[10px] font-semibold text-white hover:bg-[#35373c]"
@@ -764,17 +925,20 @@ export function CommunityHub() {
                   className="cursor-pointer rounded bg-[#da373c]/20 px-2 py-1 text-[10px] font-bold text-[#da373c] hover:bg-[#da373c] hover:text-white"
                   title="Desconectar da Sala de Voz"
                 >
-                  Sair da Call
+                  Sair
                 </button>
               </div>
             </div>
           </div>
         )}
 
-        {/* Discord Bottom User Profile Bar */}
+        {/* Discord Bottom User Profile Bar with Real Mic/Headphone Icons */}
         {user && (
           <div className="flex items-center justify-between bg-[#1e1f22] px-2.5 py-2">
-            <div className="flex items-center gap-2 min-w-0">
+            <div
+              onClick={() => setInspectedMember(user)}
+              className="flex cursor-pointer items-center gap-2 min-w-0 rounded px-1 py-0.5 hover:bg-[#2b2d31]"
+            >
               <img
                 src={user.avatar_url}
                 alt={user.username}
@@ -799,32 +963,42 @@ export function CommunityHub() {
               <button
                 type="button"
                 onClick={toggleMic}
-                className={`cursor-pointer rounded px-2 py-1 text-[10px] font-semibold ${
+                className={`cursor-pointer rounded p-1.5 transition ${
                   micEnabled
-                    ? 'bg-[#2b2d31] text-[#23a55a] hover:bg-[#35373c]'
+                    ? 'text-[#b5bac1] hover:bg-[#2b2d31] hover:text-white'
                     : 'bg-[#da373c]/20 text-[#da373c]'
                 }`}
+                title={micEnabled ? 'Mutar Microfone' : 'Ativar Microfone'}
               >
-                {micEnabled ? 'Mic' : 'Mudo'}
+                {micEnabled ? (
+                  <Mic className="h-4 w-4" />
+                ) : (
+                  <MicOff className="h-4 w-4" />
+                )}
               </button>
 
               <button
                 type="button"
                 onClick={toggleDeafen}
-                className={`cursor-pointer rounded px-2 py-1 text-[10px] font-semibold ${
+                className={`cursor-pointer rounded p-1.5 transition ${
                   !deafened
-                    ? 'bg-[#2b2d31] text-zinc-200 hover:bg-[#35373c]'
+                    ? 'text-[#b5bac1] hover:bg-[#2b2d31] hover:text-white'
                     : 'bg-[#da373c]/20 text-[#da373c]'
                 }`}
+                title={deafened ? 'Ativar Áudio' : 'Desativar Áudio'}
               >
-                {deafened ? 'Surdo' : 'Fone'}
+                {deafened ? (
+                  <HeadphoneOff className="h-4 w-4" />
+                ) : (
+                  <Headphones className="h-4 w-4" />
+                )}
               </button>
             </div>
           </div>
         )}
       </aside>
 
-      {/* CENTER AREA: Switches between Full Text Channel View OR Voice/Stream Stage */}
+      {/* CENTER AREA: Full Text Channel View OR Voice/Stream/WatchTogether Stage */}
       <div className="flex flex-1 flex-col overflow-hidden bg-[#1e1f22]">
         {/* Top Header */}
         <header className="relative flex h-12 shrink-0 items-center justify-between border-b border-[#1f2023] bg-[#2b2d31] px-4">
@@ -894,6 +1068,22 @@ export function CommunityHub() {
                 </option>
               </select>
             </div>
+
+            {/* Watch Together Toggle */}
+            {selectedChannel.type === 'voice' && activeVoiceRoom && (
+              <button
+                type="button"
+                onClick={() => setShowWatchTogether((w) => !w)}
+                className={`flex cursor-pointer items-center gap-1.5 rounded px-2.5 py-1 text-xs font-semibold ${
+                  showWatchTogether || watchState?.active
+                    ? 'bg-[#5865f2] text-white'
+                    : 'bg-[#1e1f22] text-zinc-200 hover:bg-[#35373c]'
+                }`}
+              >
+                <Tv className="h-3.5 w-3.5" />
+                Watch / Música
+              </button>
+            )}
 
             {/* Sound Settings Popover */}
             <div className="relative">
@@ -1065,21 +1255,54 @@ export function CommunityHub() {
           <>
             {/* Main Discord Call Stage Area */}
             <div className="flex flex-1 flex-col overflow-y-auto p-4 gap-3">
-              {allStreams.length === 0 ? (
+              {showWatchTogether || watchState?.active ? (
+                <WatchTogetherStage
+                  watchState={watchState}
+                  currentUser={user}
+                  onUpdateWatchState={updateWatchTogether}
+                  onStartTabShare={() => {
+                    setShowWatchTogether(false)
+                    startScreenShare({ resolution, fps, includeAudio: true })
+                  }}
+                />
+              ) : allStreams.length === 0 ? (
                 <div className="flex flex-1 flex-wrap items-center justify-center content-center gap-4 p-4">
                   {roomPeers.map((peer) => {
                     const talking =
                       peer.id === user?.id ? isSpeaking : Boolean(speakingPeers[peer.id])
                     const peerRole = getRoleForUser(peer.id)
+                    const muteInfo = getPeerMuteStatus(peer)
+
                     return (
                       <div
                         key={peer.id}
-                        className={`relative flex h-48 w-72 flex-col items-center justify-center rounded-xl bg-[#2b2d31] p-4 shadow-md transition sm:h-52 sm:w-80 ${
+                        onClick={() => setInspectedMember(peer)}
+                        className={`group relative flex h-52 w-76 cursor-pointer flex-col items-center justify-center rounded-xl bg-[#2b2d31] p-4 shadow-md transition sm:h-56 sm:w-80 ${
                           talking
                             ? 'ring-2 ring-[#23a55a]'
-                            : 'border border-[#232428]'
+                            : 'border border-[#232428] hover:border-[#3f4147]'
                         }`}
                       >
+                        {/* Top-Right Status Icons (Muted / Deafened like Discord) */}
+                        <div className="absolute top-2.5 right-2.5 flex items-center gap-1.5">
+                          {muteInfo.isMuted && (
+                            <span
+                              className="rounded-full bg-[#1e1f22] p-1.5 text-[#da373c]"
+                              title="Microfone Mutado"
+                            >
+                              <MicOff className="h-3.5 w-3.5" />
+                            </span>
+                          )}
+                          {muteInfo.isDeafened && (
+                            <span
+                              className="rounded-full bg-[#1e1f22] p-1.5 text-[#da373c]"
+                              title="Áudio Desativado"
+                            >
+                              <HeadphoneOff className="h-3.5 w-3.5" />
+                            </span>
+                          )}
+                        </div>
+
                         <img
                           src={peer.avatar_url}
                           alt={peer.username}
@@ -1089,7 +1312,7 @@ export function CommunityHub() {
                         />
                         <span
                           style={{ color: peerRole?.color || '#ffffff' }}
-                          className="mt-3 text-sm font-bold"
+                          className="mt-2.5 text-sm font-bold"
                         >
                           {peer.username}
                         </span>
@@ -1100,11 +1323,29 @@ export function CommunityHub() {
                               color: peerRole.color,
                               borderColor: `${peerRole.color}55`,
                             }}
-                            className="mt-1 rounded border px-2 py-0.5 text-[10px] font-bold"
+                            className="mt-0.5 rounded border px-2 py-0.5 text-[10px] font-bold"
                           >
                             {peerRole.name}
                           </span>
                         )}
+
+                        {/* Quick Humorous Prank Buttons on Card Hover */}
+                        <div
+                          onClick={(e) => e.stopPropagation()}
+                          className="mt-2.5 flex items-center gap-1 opacity-85 transition group-hover:opacity-100"
+                        >
+                          {PRANK_OPTIONS.map((prank) => (
+                            <button
+                              key={prank.type}
+                              type="button"
+                              onClick={() => triggerPrank(prank.type, peer)}
+                              title={prank.label}
+                              className="cursor-pointer rounded bg-[#1e1f22] px-2 py-1 text-[10px] font-bold text-zinc-200 hover:bg-[#35373c] hover:text-amber-400"
+                            >
+                              {prank.emoji}
+                            </button>
+                          ))}
+                        </div>
                       </div>
                     )
                   })}
@@ -1135,13 +1376,23 @@ export function CommunityHub() {
                       const talking =
                         peer.id === user?.id ? isSpeaking : Boolean(speakingPeers[peer.id])
                       const peerRole = getRoleForUser(peer.id)
+                      const muteInfo = getPeerMuteStatus(peer)
                       return (
                         <div
                           key={peer.id}
-                          className={`flex h-24 w-40 shrink-0 flex-col items-center justify-center rounded-lg bg-[#2b2d31] p-2 ${
+                          onClick={() => setInspectedMember(peer)}
+                          className={`relative flex h-24 w-44 shrink-0 cursor-pointer flex-col items-center justify-center rounded-lg bg-[#2b2d31] p-2 ${
                             talking ? 'ring-2 ring-[#23a55a]' : ''
                           }`}
                         >
+                          <div className="absolute top-1.5 right-1.5 flex items-center gap-1">
+                            {muteInfo.isMuted && (
+                              <MicOff className="h-3 w-3 text-[#da373c]" />
+                            )}
+                            {muteInfo.isDeafened && (
+                              <HeadphoneOff className="h-3 w-3 text-[#da373c]" />
+                            )}
+                          </div>
                           <img
                             src={peer.avatar_url}
                             alt={peer.username}
@@ -1175,36 +1426,49 @@ export function CommunityHub() {
               )}
             </div>
 
-            {/* Bottom Discord Call Control Bar */}
-            <div className="flex h-16 shrink-0 items-center justify-center gap-2.5 border-t border-[#111214] bg-[#232428] px-4">
+            {/* Bottom Discord Call Control Bar with Icons */}
+            <div className="flex h-16 shrink-0 flex-wrap items-center justify-center gap-2 border-t border-[#111214] bg-[#232428] px-4">
               <button
                 type="button"
                 onClick={toggleMic}
-                className={`cursor-pointer rounded-full px-4 py-2 text-xs font-semibold transition ${
+                className={`flex cursor-pointer items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold transition ${
                   micEnabled
                     ? 'bg-[#2b2d31] text-white hover:bg-[#35373c]'
                     : 'bg-[#da373c] text-white hover:bg-[#a1282c]'
                 }`}
               >
-                {micEnabled ? 'Microfone: Ligado' : 'Microfone: Mutado'}
+                {micEnabled ? (
+                  <Mic className="h-4 w-4" />
+                ) : (
+                  <MicOff className="h-4 w-4" />
+                )}
+                {micEnabled ? 'Microfone' : 'Mutado'}
               </button>
 
               <button
                 type="button"
                 onClick={toggleDeafen}
-                className={`cursor-pointer rounded-full px-4 py-2 text-xs font-semibold transition ${
+                className={`flex cursor-pointer items-center gap-2 rounded-full px-4 py-2 text-xs font-semibold transition ${
                   !deafened
                     ? 'bg-[#2b2d31] text-white hover:bg-[#35373c]'
                     : 'bg-[#da373c] text-white hover:bg-[#a1282c]'
                 }`}
               >
-                {deafened ? 'Áudio: Desativado' : 'Áudio: Ligado'}
+                {deafened ? (
+                  <HeadphoneOff className="h-4 w-4" />
+                ) : (
+                  <Headphones className="h-4 w-4" />
+                )}
+                {deafened ? 'Áudio: OFF' : 'Áudio: ON'}
               </button>
 
               {!isSharing ? (
                 <button
                   type="button"
-                  onClick={() => startScreenShare({ resolution, fps, includeAudio: true })}
+                  onClick={() => {
+                    setShowWatchTogether(false)
+                    startScreenShare({ resolution, fps, includeAudio: true })
+                  }}
                   className="cursor-pointer rounded-full bg-[#23a55a] px-5 py-2 text-xs font-bold text-white hover:bg-[#1a7f44]"
                 >
                   Compartilhar Tela
@@ -1218,6 +1482,19 @@ export function CommunityHub() {
                   Parar Transmissão
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={() => setShowWatchTogether((w) => !w)}
+                className={`flex cursor-pointer items-center gap-1.5 rounded-full px-4 py-2 text-xs font-semibold transition ${
+                  showWatchTogether || watchState?.active
+                    ? 'bg-[#5865f2] text-white'
+                    : 'bg-[#2b2d31] text-zinc-200 hover:bg-[#35373c]'
+                }`}
+              >
+                <Tv className="h-3.5 w-3.5" />
+                Watch Together
+              </button>
 
               <button
                 type="button"
@@ -1261,9 +1538,9 @@ export function CommunityHub() {
         />
       )}
 
-      {/* RIGHT DISCORD MEMBERS LIST BY ROLE (Cargos) */}
+      {/* RIGHT DISCORD MEMBERS LIST BY ROLE (Clickable to view profile, join date, last seen, roles & pranks) */}
       {showMembersSidebar && (
-        <aside className="hidden w-60 shrink-0 flex-col border-l border-[#1f2023] bg-[#2b2d31] p-3 overflow-y-auto xl:flex">
+        <aside className="hidden w-64 shrink-0 flex-col border-l border-[#1f2023] bg-[#2b2d31] p-3 overflow-y-auto xl:flex">
           {roles.map((role) => {
             const roleMembers = allMembers.filter(
               (m) => (memberRoles[m.id] || 'seco-raiz') === role.id
@@ -1277,31 +1554,47 @@ export function CommunityHub() {
                 </div>
                 <div className="space-y-1">
                   {roleMembers.map((m) => {
-                    const isOnlineInVoice = roomPeers.some((p) => p.id === m.id)
+                    const onlineInfo = globalVoicePresence[m.id]
+                    const isOnline = Boolean(onlineInfo)
+                    const memberVoiceRoom = voiceChannels.find(
+                      (v) => v.id === onlineInfo?.voice_room_id
+                    )
+
                     return (
                       <div
                         key={m.id}
-                        className="flex items-center justify-between rounded px-2 py-1.5 hover:bg-[#35373c]"
+                        onClick={() => setInspectedMember(m)}
+                        className="flex cursor-pointer items-center justify-between rounded px-2 py-1.5 hover:bg-[#35373c]"
                       >
-                        <div className="flex items-center gap-2 min-w-0">
+                        <div className="flex items-center gap-2.5 min-w-0">
                           <div className="relative shrink-0">
                             <img
                               src={m.avatar_url}
                               alt={m.username}
-                              className="h-7 w-7 rounded-full object-cover"
+                              className="h-8 w-8 rounded-full object-cover"
                             />
                             <span
                               className={`absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full border-2 border-[#2b2d31] ${
-                                isOnlineInVoice ? 'bg-[#23a55a]' : 'bg-[#80848e]'
+                                isOnline ? 'bg-[#23a55a]' : 'bg-[#80848e]'
                               }`}
                             />
                           </div>
-                          <span
-                            style={{ color: role.color }}
-                            className="truncate text-xs font-bold"
-                          >
-                            {m.username}
-                          </span>
+                          <div className="min-w-0">
+                            <div
+                              style={{ color: role.color }}
+                              className="truncate text-xs font-bold"
+                            >
+                              {m.username}
+                            </div>
+                            <div className="truncate text-[10px] text-[#949ba4]">
+                              {memberVoiceRoom
+                                ? `🔊 ${memberVoiceRoom.name}`
+                                : formatRelativeTime(
+                                    m.last_seen_at || m.updated_at,
+                                    isOnline
+                                  )}
+                            </div>
+                          </div>
                         </div>
                       </div>
                     )
@@ -1325,7 +1618,7 @@ export function CommunityHub() {
             <p className="mt-1 text-xs text-[#949ba4]">
               {createChannelType === 'text'
                 ? 'Envie mensagens, memes e emotes.'
-                : 'Converse por voz e compartilhe a tela em até 120 FPS.'}
+                : 'A sala será criada na lista sem te desconectar da sua call atual.'}
             </p>
 
             <form onSubmit={handleCreateChannel} className="mt-4 space-y-3">
@@ -1381,7 +1674,7 @@ export function CommunityHub() {
       {/* MODAL: Manage Roles (Cargos) */}
       {showRolesModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-          <div className="w-full max-w-lg rounded-lg border border-[#1f2023] bg-[#313338] p-5 shadow-2xl max-h-[85vh] flex flex-col">
+          <div className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-lg border border-[#1f2023] bg-[#313338] p-5 shadow-2xl">
             <div className="flex items-center justify-between border-b border-[#1f2023] pb-3">
               <div>
                 <h3 className="text-base font-bold text-white">
@@ -1400,8 +1693,7 @@ export function CommunityHub() {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto py-4 space-y-5">
-              {/* Create New Role */}
+            <div className="flex-1 space-y-5 overflow-y-auto py-4">
               <form onSubmit={handleCreateRole} className="space-y-2">
                 <label className="block text-xs font-bold text-[#b5bac1] uppercase">
                   Criar Novo Cargo
@@ -1429,7 +1721,6 @@ export function CommunityHub() {
                 </div>
               </form>
 
-              {/* Assign Roles to Members */}
               <div>
                 <div className="mb-2 text-xs font-bold text-[#b5bac1] uppercase">
                   Membros e Cargos ({allMembers.length})

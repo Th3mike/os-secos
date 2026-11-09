@@ -6,6 +6,10 @@ export type RoomSoundEvent =
   | 'mic-on'
   | 'mic-off'
   | 'chat-message'
+  | 'prank-bury'
+  | 'prank-coffin'
+  | 'prank-reaper'
+  | 'prank-water'
 
 export interface SoundSettings {
   enabled: boolean
@@ -114,11 +118,42 @@ export function playRoomEventSound(event: RoomSoundEvent, settings?: SoundSettin
         break
 
       case 'chat-message':
-        // Subtle Discord-like message pop
         tone(740, 987.77, 0, 0.07, 'sine', 0.55)
+        break
+
+      case 'prank-bury':
+        // Deep funeral bell + shovel thuds
+        tone(220, 218, 0, 1.4, 'triangle', 1.2)
+        tone(440, 436, 0, 0.9, 'sine', 0.7)
+        tone(140, 60, 0.6, 0.22, 'sawtooth', 0.9)
+        tone(130, 55, 1.1, 0.22, 'sawtooth', 0.9)
+        tone(120, 50, 1.6, 0.25, 'sawtooth', 1.0)
+        break
+
+      case 'prank-coffin':
+        // Funeral march notes
+        tone(261.63, 261.63, 0, 0.35, 'sawtooth', 0.7)
+        tone(261.63, 261.63, 0.4, 0.25, 'sawtooth', 0.7)
+        tone(261.63, 261.63, 0.7, 0.15, 'sawtooth', 0.7)
+        tone(261.63, 261.63, 0.9, 0.4, 'sawtooth', 0.8)
+        tone(311.13, 311.13, 1.35, 0.35, 'sawtooth', 0.8)
+        tone(293.66, 261.63, 1.75, 0.5, 'sawtooth', 0.8)
+        break
+
+      case 'prank-reaper':
+        // Spooky scythe slash
+        tone(900, 140, 0, 0.45, 'sawtooth', 0.9)
+        tone(110, 55, 0.25, 0.9, 'triangle', 1.1)
+        break
+
+      case 'prank-water':
+        // Water splash / bubble ascending
+        tone(300, 900, 0, 0.2, 'sine', 0.8)
+        tone(450, 1200, 0.18, 0.2, 'sine', 0.8)
+        tone(600, 1500, 0.36, 0.25, 'sine', 0.9)
         break
     }
   } catch {
-    // Ignore autoplay restriction before user interaction
+    // Ignore autoplay restriction
   }
 }

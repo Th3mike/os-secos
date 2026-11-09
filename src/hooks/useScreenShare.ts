@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createClient, isSupabaseConfigured } from '@/lib/supabase/client'
-import { UserProfile, SignalPayload } from '@/types/community'
+import {
+  UserProfile,
+  SignalPayload,
+  PrankEvent,
+  PrankType,
+  WatchTogetherState,
+} from '@/types/community'
 import { playRoomEventSound } from '@/lib/soundEngine'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
@@ -42,14 +48,22 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const [deafened, setDeafened] = useState(false)
   const [isSpeaking, setIsSpeaking] = useState(false)
   const [speakingPeers, setSpeakingPeers] = useState<Record<string, boolean>>({})
+  const [peerMuteStates, setPeerMuteStates] = useState<
+    Record<string, { isMuted: boolean; isDeafened: boolean }>
+  >({})
+  const [activePrank, setActivePrank] = useState<PrankEvent | null>(null)
+  const [watchState, setWatchState] = useState<WatchTogetherState | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const currentUserRef = useRef<UserProfile | null>(currentUser)
   const roomPeersRef = useRef<UserProfile[]>([])
   const localStreamRef = useRef<MediaStream | null>(null)
   const micStreamRef = useRef<MediaStream | null>(null)
+  const micEnabledRef = useRef(false)
   const deafenedRef = useRef(false)
+  const watchStateRef = useRef<WatchTogetherState | null>(null)
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
+  const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map())
   const channelRef = useRef<RealtimeChannel | null>(null)
   const audioAnalyserIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const knownPeersRef = useRef<Set<string>>(new Set())
@@ -64,8 +78,16 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   }, [roomPeers])
 
   useEffect(() => {
+    micEnabledRef.current = micEnabled
+  }, [micEnabled])
+
+  useEffect(() => {
     deafenedRef.current = deafened
   }, [deafened])
+
+  useEffect(() => {
+    watchStateRef.current = watchState
+  }, [watchState])
 
   const cleanupPeer = useCallback((peerId: string) => {
     const pc = pcsRef.current.get(peerId)
@@ -73,6 +95,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       pc.close()
       pcsRef.current.delete(peerId)
     }
+    pendingCandidatesRef.current.delete(peerId)
     setRemoteStreams((prev) => {
       const hadStream = prev.some((item) => item.peerId === peerId)
       if (hadStream && !deafenedRef.current) {
@@ -129,7 +152,11 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
       pc.ontrack = (event) => {
         const track = event.track
-        const stream = event.streams[0] || new MediaStream([track])
+        // Always wrap into a fresh MediaStream reference so React <video> updates immediately when a new track arrives!
+        const incomingStream = event.streams[0]
+        const freshStream = incomingStream
+          ? new MediaStream(incomingStream.getTracks())
+          : new MediaStream([track])
 
         if (track.kind === 'video') {
           setRemoteStreams((prev) => {
@@ -139,22 +166,25 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             }
             if (exists) {
               return prev.map((s) =>
-                s.peerId === targetPeerId ? { peerId: targetPeerId, user: targetUser, stream } : s
+                s.peerId === targetPeerId
+                  ? { peerId: targetPeerId, user: targetUser, stream: freshStream }
+                  : s
               )
             }
-            return [...prev, { peerId: targetPeerId, user: targetUser, stream }]
+            return [...prev, { peerId: targetPeerId, user: targetUser, stream: freshStream }]
           })
         } else if (track.kind === 'audio') {
-          // If this stream also has video, it's system audio handled by VideoStage; otherwise voice audio
-          if (stream.getVideoTracks().length === 0) {
+          if (!incomingStream || incomingStream.getVideoTracks().length === 0) {
             setRemoteAudios((prev) => {
               const exists = prev.some((s) => s.peerId === targetPeerId)
               if (exists) {
                 return prev.map((s) =>
-                  s.peerId === targetPeerId ? { peerId: targetPeerId, user: targetUser, stream } : s
+                  s.peerId === targetPeerId
+                    ? { peerId: targetPeerId, user: targetUser, stream: freshStream }
+                    : s
                 )
               }
-              return [...prev, { peerId: targetPeerId, user: targetUser, stream }]
+              return [...prev, { peerId: targetPeerId, user: targetUser, stream: freshStream }]
             })
           }
         }
@@ -170,6 +200,19 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     },
     [cleanupPeer, sendSignal]
   )
+
+  const flushPendingCandidates = useCallback(async (peerId: string, pc: RTCPeerConnection) => {
+    const queue = pendingCandidatesRef.current.get(peerId)
+    if (!queue || queue.length === 0) return
+    pendingCandidatesRef.current.delete(peerId)
+    for (const cand of queue) {
+      try {
+        await pc.addIceCandidate(new RTCIceCandidate(cand))
+      } catch {
+        // Ignore stale candidate
+      }
+    }
+  }, [])
 
   const syncTracksAndOffer = useCallback(
     async (targetPeerId: string, targetUser: UserProfile) => {
@@ -221,7 +264,6 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     }
   }, [syncTracksAndOffer])
 
-  // Subscribe ONLY when roomId or userId changes — prevents tearing down active streams!
   const currentUserId = currentUser?.id
 
   useEffect(() => {
@@ -284,10 +326,35 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             if (localStreamRef.current || micStreamRef.current) {
               await syncTracksAndOffer(sig.from, sig.fromUser)
             }
+            if (watchStateRef.current) {
+              sendSignal({
+                type: 'watch-sync',
+                from: curMe.id,
+                fromUser: curMe,
+                to: sig.from,
+                watchState: watchStateRef.current,
+              })
+            }
+            sendSignal({
+              type: 'mute-state',
+              from: curMe.id,
+              fromUser: curMe,
+              to: sig.from,
+              isMuted: !micEnabledRef.current,
+              isDeafened: deafenedRef.current,
+            })
           } else if (sig.type === 'offer' && sig.sdp) {
             const pc = getOrCreatePeerConnection(sig.from, sig.fromUser)
             if (!pc) return
-            await pc.setRemoteDescription(new RTCSessionDescription(sig.sdp))
+            if (pc.signalingState !== 'stable') {
+              await Promise.all([
+                pc.setLocalDescription({ type: 'rollback' }),
+                pc.setRemoteDescription(new RTCSessionDescription(sig.sdp)),
+              ])
+            } else {
+              await pc.setRemoteDescription(new RTCSessionDescription(sig.sdp))
+            }
+            await flushPendingCandidates(sig.from, pc)
             const answer = await pc.createAnswer()
             await pc.setLocalDescription(answer)
             sendSignal({
@@ -301,11 +368,17 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             const pc = pcsRef.current.get(sig.from)
             if (pc && pc.signalingState === 'have-local-offer') {
               await pc.setRemoteDescription(new RTCSessionDescription(sig.sdp))
+              await flushPendingCandidates(sig.from, pc)
             }
           } else if (sig.type === 'ice-candidate' && sig.candidate) {
             const pc = pcsRef.current.get(sig.from)
-            if (pc && pc.remoteDescription) {
+            if (pc && pc.remoteDescription && pc.remoteDescription.type) {
               await pc.addIceCandidate(new RTCIceCandidate(sig.candidate))
+            } else {
+              // Queue candidate until remoteDescription is set!
+              const list = pendingCandidatesRef.current.get(sig.from) || []
+              list.push(sig.candidate)
+              pendingCandidatesRef.current.set(sig.from, list)
             }
           } else if (sig.type === 'stop-stream') {
             setRemoteStreams((prev) => prev.filter((item) => item.peerId !== sig.from))
@@ -317,6 +390,21 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
               ...prev,
               [sig.from]: Boolean(sig.isSpeaking),
             }))
+          } else if (sig.type === 'mute-state') {
+            setPeerMuteStates((prev) => ({
+              ...prev,
+              [sig.from]: {
+                isMuted: Boolean(sig.isMuted),
+                isDeafened: Boolean(sig.isDeafened),
+              },
+            }))
+          } else if (sig.type === 'prank' && sig.prank) {
+            setActivePrank(sig.prank)
+            if (!deafenedRef.current) {
+              playRoomEventSound(`prank-${sig.prank.type}`)
+            }
+          } else if (sig.type === 'watch-sync') {
+            setWatchState(sig.watchState || null)
           }
         } catch (err) {
           console.error('Signal error:', err)
@@ -328,6 +416,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           await channel.track({
             ...curMe,
             status: localStreamRef.current ? 'streaming' : 'online',
+            isMuted: !micEnabledRef.current,
+            isDeafened: deafenedRef.current,
           })
           if (!deafenedRef.current) {
             playRoomEventSound('user-join')
@@ -349,12 +439,21 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     return () => {
       pcsMap.forEach((pc) => pc.close())
       pcsMap.clear()
+      pendingCandidatesRef.current.clear()
       setRemoteStreams([])
       setRemoteAudios([])
       supabase.removeChannel(channel)
       channelRef.current = null
     }
-  }, [roomId, currentUserId, cleanupPeer, getOrCreatePeerConnection, sendSignal, syncTracksAndOffer])
+  }, [
+    roomId,
+    currentUserId,
+    cleanupPeer,
+    flushPendingCandidates,
+    getOrCreatePeerConnection,
+    sendSignal,
+    syncTracksAndOffer,
+  ])
 
   const stopScreenShare = useCallback(() => {
     const me = currentUserRef.current
@@ -381,7 +480,12 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         fromUser: me,
       })
       if (channelRef.current) {
-        channelRef.current.track({ ...me, status: 'online' })
+        channelRef.current.track({
+          ...me,
+          status: 'online',
+          isMuted: !micEnabledRef.current,
+          isDeafened: deafenedRef.current,
+        })
       }
     }
   }, [sendSignal])
@@ -396,16 +500,16 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       const widthMap = { '720p': 1280, '1080p': 1920, '1440p': 2560 }
 
       try {
-        // Stop previous share if any
         if (localStreamRef.current) {
           localStreamRef.current.getTracks().forEach((t) => t.stop())
         }
 
+        // Do NOT pass max: 120 because entire-screen capture on Windows fails/goes black if monitor is 60Hz
         const stream = await navigator.mediaDevices.getDisplayMedia({
           video: {
             width: { ideal: widthMap[options.resolution] },
             height: { ideal: heightMap[options.resolution] },
-            frameRate: { ideal: options.fps, max: options.fps },
+            frameRate: { ideal: options.fps },
           },
           audio: options.includeAudio
             ? {
@@ -432,7 +536,12 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         }
 
         if (channelRef.current) {
-          await channelRef.current.track({ ...me, status: 'streaming' })
+          await channelRef.current.track({
+            ...me,
+            status: 'streaming',
+            isMuted: !micEnabledRef.current,
+            isDeafened: deafenedRef.current,
+          })
         }
 
         await renegotiateAllPeers()
@@ -471,6 +580,21 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           fromUser: me,
           isSpeaking: false,
         })
+        sendSignal({
+          type: 'mute-state',
+          from: me.id,
+          fromUser: me,
+          isMuted: true,
+          isDeafened: deafenedRef.current,
+        })
+        if (channelRef.current) {
+          channelRef.current.track({
+            ...me,
+            status: localStreamRef.current ? 'streaming' : 'online',
+            isMuted: true,
+            isDeafened: deafenedRef.current,
+          })
+        }
       } else {
         const audioStream = await navigator.mediaDevices.getUserMedia({
           audio: {
@@ -483,6 +607,22 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         setMicEnabled(true)
         setDeafened(false)
         playRoomEventSound('mic-on')
+
+        sendSignal({
+          type: 'mute-state',
+          from: me.id,
+          fromUser: me,
+          isMuted: false,
+          isDeafened: false,
+        })
+        if (channelRef.current) {
+          channelRef.current.track({
+            ...me,
+            status: localStreamRef.current ? 'streaming' : 'online',
+            isMuted: false,
+            isDeafened: false,
+          })
+        }
 
         const AudioCtx =
           window.AudioContext ||
@@ -524,8 +664,69 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   }, [micEnabled, renegotiateAllPeers, sendSignal])
 
   const toggleDeafen = useCallback(() => {
-    setDeafened((prev) => !prev)
-  }, [])
+    const me = currentUserRef.current
+    setDeafened((prev) => {
+      const next = !prev
+      if (me) {
+        sendSignal({
+          type: 'mute-state',
+          from: me.id,
+          fromUser: me,
+          isMuted: !micEnabledRef.current,
+          isDeafened: next,
+        })
+        if (channelRef.current) {
+          channelRef.current.track({
+            ...me,
+            status: localStreamRef.current ? 'streaming' : 'online',
+            isMuted: !micEnabledRef.current,
+            isDeafened: next,
+          })
+        }
+      }
+      return next
+    })
+  }, [sendSignal])
+
+  const triggerPrank = useCallback(
+    (type: PrankType, targetUser: UserProfile) => {
+      const me = currentUserRef.current
+      if (!me) return
+      const prank: PrankEvent = {
+        id: crypto.randomUUID(),
+        type,
+        fromUser: me,
+        targetUser,
+        timestamp: Date.now(),
+      }
+      setActivePrank(prank)
+      if (!deafenedRef.current) {
+        playRoomEventSound(`prank-${type}`)
+      }
+      sendSignal({
+        type: 'prank',
+        from: me.id,
+        fromUser: me,
+        prank,
+      })
+    },
+    [sendSignal]
+  )
+
+  const updateWatchTogether = useCallback(
+    (next: WatchTogetherState | null) => {
+      const me = currentUserRef.current
+      if (!me) return
+      setWatchState(next)
+      sendSignal({
+        type: 'watch-sync',
+        from: me.id,
+        fromUser: me,
+        watchState: next,
+      })
+    },
+    [sendSignal]
+  )
 
   return {
     localStream,
@@ -537,6 +738,12 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     deafened,
     isSpeaking,
     speakingPeers,
+    peerMuteStates,
+    activePrank,
+    setActivePrank,
+    watchState,
+    updateWatchTogether,
+    triggerPrank,
     error,
     startScreenShare,
     stopScreenShare,

@@ -12,9 +12,13 @@ export interface UserProfile {
   discord_tag?: string
   status?: 'online' | 'streaming' | 'idle'
   role_id?: string | null
+  voice_room_id?: string | null
   isSpeaking?: boolean
   isMuted?: boolean
   isDeafened?: boolean
+  joined_at?: string
+  last_seen_at?: string
+  updated_at?: string
 }
 
 export interface Room {
@@ -36,6 +40,29 @@ export interface ChatMessage {
   created_at: string
 }
 
+export type PrankType = 'bury' | 'coffin' | 'reaper' | 'water'
+
+export interface PrankEvent {
+  id: string
+  type: PrankType
+  fromUser: UserProfile
+  targetUser: UserProfile
+  timestamp: number
+}
+
+export interface WatchTogetherState {
+  active: boolean
+  provider: 'youtube' | 'spotify' | 'twitch' | 'kick' | 'custom'
+  url: string
+  embedUrl: string
+  title?: string
+  hostId: string
+  hostName: string
+  isPlaying: boolean
+  currentTime: number
+  updatedAt: number
+}
+
 export interface SignalPayload {
   type:
     | 'offer'
@@ -44,10 +71,17 @@ export interface SignalPayload {
     | 'request-stream'
     | 'stop-stream'
     | 'speaking-state'
+    | 'mute-state'
+    | 'prank'
+    | 'watch-sync'
   from: string
   fromUser: UserProfile
   to?: string
   sdp?: RTCSessionDescriptionInit
   candidate?: RTCIceCandidateInit
   isSpeaking?: boolean
+  isMuted?: boolean
+  isDeafened?: boolean
+  prank?: PrankEvent
+  watchState?: WatchTogetherState | null
 }
