@@ -16,7 +16,93 @@ interface ChatPanelProps {
   onClose?: () => void
 }
 
-function renderMessageWithEmotes(content: string) {
+const CHAT_COLORS: { name: string; hex: string }[] = [
+  { name: 'vermelho', hex: '#ef4444' },
+  { name: 'laranja', hex: '#f97316' },
+  { name: 'amarelo', hex: '#facc15' },
+  { name: 'verde', hex: '#22c55e' },
+  { name: 'azul', hex: '#3b82f6' },
+  { name: 'roxo', hex: '#a855f7' },
+  { name: 'rosa', hex: '#ec4899' },
+  { name: 'ciano', hex: '#06b6d4' },
+]
+
+function SpoilerText({ children }: { children: React.ReactNode }) {
+  const [shown, setShown] = useState(false)
+  return (
+    <span
+      onClick={() => setShown(true)}
+      title={shown ? undefined : 'Clique para revelar o spoiler'}
+      className={`cursor-pointer rounded px-0.5 transition ${shown ? 'bg-white/10' : 'bg-[#1e1f22] text-transparent select-none'
+        }`}
+    >
+      {children}
+    </span>
+  )
+}
+
+// Discord-like formatting: **negrito** *itálico* __sublinhado__ ~~riscado~~ `código` ||spoiler|| [cor=#hex]texto[/cor]
+const FORMAT_REGEX =
+  /(\[cor=(#[0-9a-f]{3,8}|[a-z]+)\]([\s\S]+?)\[\/cor\]|\*\*([\s\S]+?)\*\*|__([\s\S]+?)__|~~([\s\S]+?)~~|\|\|([\s\S]+?)\|\||`([^`]+?)`|\*([^*\n]+?)\*)/i
+
+function renderFormattedText(content: string, keyPrefix = 'f'): React.ReactNode[] {
+  const out: React.ReactNode[] = []
+  let rest = content
+  let i = 0
+  while (rest.length > 0) {
+    const m = rest.match(FORMAT_REGEX)
+    if (!m || m.index === undefined) {
+      out.push(...renderMessageWithEmotes(rest, `${keyPrefix}-t${i}`))
+      break
+    }
+    if (m.index > 0) {
+      out.push(...renderMessageWithEmotes(rest.slice(0, m.index), `${keyPrefix}-t${i}`))
+    }
+    const k = `${keyPrefix}-${i}`
+    if (m[2] !== undefined) {
+      const raw = m[2].toLowerCase()
+      const color = raw.startsWith('#')
+        ? raw
+        : CHAT_COLORS.find((c) => c.name === raw)?.hex || raw
+      out.push(
+        <span key={k} style={{ color }}>
+          {renderFormattedText(m[3], k)}
+        </span>
+      )
+    } else if (m[4] !== undefined) {
+      out.push(
+        <strong key={k} className="font-extrabold text-white">
+          {renderFormattedText(m[4], k)}
+        </strong>
+      )
+    } else if (m[5] !== undefined) {
+      out.push(
+        <u key={k}>{renderFormattedText(m[5], k)}</u>
+      )
+    } else if (m[6] !== undefined) {
+      out.push(
+        <s key={k}>{renderFormattedText(m[6], k)}</s>
+      )
+    } else if (m[7] !== undefined) {
+      out.push(<SpoilerText key={k}>{renderFormattedText(m[7], k)}</SpoilerText>)
+    } else if (m[8] !== undefined) {
+      out.push(
+        <code key={k} className="rounded bg-[#1e1f22] px-1 py-0.5 font-mono text-[11px] text-amber-200">
+          {m[8]}
+        </code>
+      )
+    } else if (m[9] !== undefined) {
+      out.push(
+        <em key={k}>{renderFormattedText(m[9], k)}</em>
+      )
+    }
+    rest = rest.slice(m.index + m[0].length)
+    i++
+  }
+  return out
+}
+
+function renderMessageWithEmotes(content: string, keyPrefix = 'e') {
   const parts = content.split(/(:[a-z0-9_]+:)/gi)
   const nonEmpty = parts.filter((p) => p.trim() !== '')
   const isSingleEmote =
@@ -27,14 +113,18 @@ function renderMessageWithEmotes(content: string) {
     if (emote) {
       return (
         <EmoteSprite
-          key={idx}
+          key={`${keyPrefix}-${idx}`}
           emote={emote}
           size={isSingleEmote ? 60 : 30}
           className="mx-0.5 my-0.5"
         />
       )
     }
-    return <span key={idx}>{part}</span>
+    return (
+      <span key={`${keyPrefix}-${idx}`} className="whitespace-pre-wrap">
+        {part}
+      </span>
+    )
   })
 }
 
@@ -116,6 +206,24 @@ export function ChatPanel({
 
   const bottomRef = useRef<HTMLDivElement | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const textInputRef = useRef<HTMLInputElement | null>(null)
+  const [showFormatBar, setShowFormatBar] = useState(false)
+
+  // Wraps the current selection (or inserts placeholder) with formatting markers
+  const applyFormat = (before: string, after: string = before, placeholder = 'texto') => {
+    const el = textInputRef.current
+    const start = el?.selectionStart ?? input.length
+    const end = el?.selectionEnd ?? input.length
+    const selected = input.slice(start, end) || placeholder
+    const next = input.slice(0, start) + before + selected + after + input.slice(end)
+    setInput(next)
+    requestAnimationFrame(() => {
+      if (!el) return
+      el.focus()
+      const selStart = start + before.length
+      el.setSelectionRange(selStart, selStart + selected.length)
+    })
+  }
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -353,9 +461,8 @@ export function ChatPanel({
       }}
       onDrop={handleDrop}
       onPaste={handlePaste}
-      className={`relative flex h-full flex-col bg-[#313338] ${
-        fullView ? 'flex-1' : 'w-full border-l border-[#1f2023] sm:w-80'
-      }`}
+      className={`relative flex h-full flex-col bg-[#313338] ${fullView ? 'flex-1' : 'w-full border-l border-[#1f2023] sm:w-80'
+        }`}
     >
       {/* Drag-and-drop overlay */}
       {isDragging && (
@@ -439,7 +546,7 @@ export function ChatPanel({
                   </div>
                   {text && (
                     <div className="mt-0.5 break-words text-xs leading-relaxed text-[#dbdee1]">
-                      {renderMessageWithEmotes(text)}
+                      {renderFormattedText(text)}
                     </div>
                   )}
                   {imageUrl && (
@@ -525,6 +632,53 @@ export function ChatPanel({
 
       {/* Discord Message Input Bar */}
       <form onSubmit={sendMessage} className="p-3.5 pt-0">
+        {showFormatBar && (
+          <div className="mb-1.5 flex flex-wrap items-center gap-1 rounded-lg bg-[#2b2d31] px-2 py-1.5">
+            {(
+              [
+                { label: 'B', title: 'Negrito (**texto**)', cls: 'font-extrabold', b: '**' },
+                { label: 'I', title: 'Itálico (*texto*)', cls: 'italic', b: '*' },
+                { label: 'U', title: 'Sublinhado (__texto__)', cls: 'underline', b: '__' },
+                { label: 'S', title: 'Riscado (~~texto~~)', cls: 'line-through', b: '~~' },
+                { label: '</>', title: 'Código (`texto`)', cls: 'font-mono', b: '`' },
+                { label: '👁 Spoiler', title: 'Spoiler (||texto||)', cls: '', b: '||' },
+              ] as const
+            ).map((f) => (
+              <button
+                key={f.label}
+                type="button"
+                title={f.title}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyFormat(f.b)}
+                className={`cursor-pointer rounded bg-[#1e1f22] px-2 py-0.5 text-[11px] text-zinc-200 hover:bg-[#404249] hover:text-white ${f.cls}`}
+              >
+                {f.label}
+              </button>
+            ))}
+            <span className="mx-1 h-4 w-px bg-white/10" />
+            {CHAT_COLORS.map((c) => (
+              <button
+                key={c.name}
+                type="button"
+                title={`Cor ${c.name}`}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => applyFormat(`[cor=${c.hex}]`, '[/cor]')}
+                style={{ backgroundColor: c.hex }}
+                className="h-4 w-4 cursor-pointer rounded-full ring-1 ring-black/40 hover:scale-110"
+              />
+            ))}
+            <label
+              title="Cor personalizada"
+              className="relative h-4 w-4 cursor-pointer overflow-hidden rounded-full bg-[conic-gradient(red,yellow,lime,cyan,blue,magenta,red)] ring-1 ring-black/40"
+            >
+              <input
+                type="color"
+                onChange={(e) => applyFormat(`[cor=${e.target.value}]`, '[/cor]')}
+                className="absolute inset-0 cursor-pointer opacity-0"
+              />
+            </label>
+          </div>
+        )}
         <input
           ref={fileInputRef}
           type="file"
@@ -543,22 +697,44 @@ export function ChatPanel({
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
             </svg>
           </button>
+          <button
+            type="button"
+            onClick={() => setShowFormatBar((s) => !s)}
+            className={`h-7 shrink-0 cursor-pointer rounded px-2 text-[11px] font-extrabold ${showFormatBar ? 'bg-[#5865f2] text-white' : 'bg-[#2b2d31] text-zinc-200 hover:bg-[#1e1f22]'
+              }`}
+            title="Formatação de texto (negrito, itálico, cor...)"
+          >
+            Aa
+          </button>
           <input
+            ref={textInputRef}
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.ctrlKey && e.key.toLowerCase() === 'b') {
+                e.preventDefault()
+                applyFormat('**')
+              } else if (e.ctrlKey && e.key.toLowerCase() === 'i') {
+                e.preventDefault()
+                applyFormat('*')
+              } else if (e.ctrlKey && e.key.toLowerCase() === 'u') {
+                e.preventDefault()
+                applyFormat('__')
+              }
+            }}
             onPaste={handlePaste}
             placeholder={
               pendingImage
                 ? 'Adicione um comentário na imagem (opcional)...'
                 : `Conversar ou colar print (Ctrl+V) em #${roomName.toLowerCase()}`
             }
-            className="flex-1 bg-transparent text-xs text-white placeholder-[#949ba4] focus:outline-none"
+            className="min-w-0 flex-1 bg-transparent text-xs text-white placeholder-[#949ba4] focus:outline-none"
           />
           <button
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="cursor-pointer rounded bg-[#2b2d31] px-2 py-1 text-[11px] font-semibold text-zinc-300 hover:bg-[#1e1f22] hover:text-white"
+            className="hidden cursor-pointer rounded bg-[#2b2d31] px-2 py-1 text-[11px] font-semibold text-zinc-300 hover:bg-[#1e1f22] hover:text-white sm:inline-block"
             title="Anexar imagem / screenshot"
           >
             📷 Print
@@ -566,11 +742,10 @@ export function ChatPanel({
           <button
             type="button"
             onClick={() => setShowEmotes((s) => !s)}
-            className={`cursor-pointer rounded px-2.5 py-1 text-[11px] font-semibold ${
-              showEmotes
+            className={`cursor-pointer rounded px-2.5 py-1 text-[11px] font-semibold ${showEmotes
                 ? 'bg-[#5865f2] text-white'
                 : 'bg-[#2b2d31] text-zinc-200 hover:bg-[#1e1f22]'
-            }`}
+              }`}
           >
             Emotes
           </button>

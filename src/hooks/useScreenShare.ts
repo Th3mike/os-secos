@@ -18,6 +18,9 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
     { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
   ],
 }
 
@@ -243,6 +246,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const myCinemaPlayerRef = useRef<CinemaPlayerState | null>(null)
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
   const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map())
+  const peerLeaveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const reconnectDebounceRef = useRef<Map<string, number>>(new Map())
   const channelRef = useRef<RealtimeChannel | null>(null)
   const audioAnalyserIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const knownPeersRef = useRef<Set<string>>(new Set())
@@ -269,6 +274,14 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   }, [watchState])
 
   const cleanupPeer = useCallback((peerId: string) => {
+    // Clear any pending leave debounce timer
+    const leaveTimer = peerLeaveTimersRef.current.get(peerId)
+    if (leaveTimer) {
+      clearTimeout(leaveTimer)
+      peerLeaveTimersRef.current.delete(peerId)
+    }
+    reconnectDebounceRef.current.delete(peerId)
+
     const pc = pcsRef.current.get(peerId)
     if (pc) {
       pc.close()
@@ -401,8 +414,62 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       }
 
       pc.onconnectionstatechange = () => {
-        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        if (pc.connectionState === 'closed') {
           cleanupPeer(targetPeerId)
+          return
+        }
+
+        if (pc.connectionState === 'failed') {
+          // Attempt graceful auto-recovery instead of instantly killing the stream!
+          const now = Date.now()
+          const lastAttempt = reconnectDebounceRef.current.get(targetPeerId) || 0
+          if (now - lastAttempt > 4000) {
+            reconnectDebounceRef.current.set(targetPeerId, now)
+            try {
+              if (typeof pc.restartIce === 'function') {
+                pc.restartIce()
+              }
+            } catch {
+              // ignore
+            }
+            const curMe = currentUserRef.current
+            if (curMe) {
+              sendSignal({
+                type: 'request-stream',
+                from: curMe.id,
+                fromUser: curMe,
+                to: targetPeerId,
+              })
+            }
+          } else {
+            cleanupPeer(targetPeerId)
+          }
+        }
+      }
+
+      pc.oniceconnectionstatechange = () => {
+        if (pc.iceConnectionState === 'failed') {
+          const now = Date.now()
+          const lastAttempt = reconnectDebounceRef.current.get(targetPeerId) || 0
+          if (now - lastAttempt > 4000) {
+            reconnectDebounceRef.current.set(targetPeerId, now)
+            try {
+              if (typeof pc.restartIce === 'function') {
+                pc.restartIce()
+              }
+            } catch {
+              // ignore
+            }
+            const curMe = currentUserRef.current
+            if (curMe) {
+              sendSignal({
+                type: 'request-stream',
+                from: curMe.id,
+                fromUser: curMe,
+                to: targetPeerId,
+              })
+            }
+          }
         }
       }
 
@@ -563,6 +630,12 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
         if (initialPresenceSyncedRef.current && !deafenedRef.current) {
           for (const id of nextIds) {
+            // If user came back or was previously pending disconnect, cancel disconnect timer!
+            const pendingTimer = peerLeaveTimersRef.current.get(id)
+            if (pendingTimer) {
+              clearTimeout(pendingTimer)
+              peerLeaveTimersRef.current.delete(id)
+            }
             if (id !== currentUserId && !knownPeersRef.current.has(id)) {
               playRoomEventSound('user-join')
               break
@@ -570,9 +643,15 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           }
           for (const id of knownPeersRef.current) {
             if (id !== currentUserId && !nextIds.has(id)) {
-              playRoomEventSound('user-leave')
-              cleanupPeer(id)
-              break
+              // Don't kill WebRTC streams on momentary heartbeat glitches! Debounce 6 seconds.
+              if (!peerLeaveTimersRef.current.has(id)) {
+                const timer = setTimeout(() => {
+                  peerLeaveTimersRef.current.delete(id)
+                  playRoomEventSound('user-leave')
+                  cleanupPeer(id)
+                }, 6000)
+                peerLeaveTimersRef.current.set(id, timer)
+              }
             }
           }
         }
@@ -762,6 +841,9 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     channelRef.current = channel
 
     return () => {
+      peerLeaveTimersRef.current.forEach((t) => clearTimeout(t))
+      peerLeaveTimersRef.current.clear()
+      reconnectDebounceRef.current.clear()
       pcsMap.forEach((pc) => pc.close())
       pcsMap.clear()
       pendingCandidatesRef.current.clear()

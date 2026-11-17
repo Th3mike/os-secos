@@ -235,70 +235,136 @@ const CATALOG_MOVIES: {
   posterBg: string
 }[] = [
   {
-    title: 'Big Buck Bunny (Animação 3D HD)',
-    posterTitle: 'BIG BUCK BUNNY',
-    posterSub: 'ANIMAÇÃO 3D • COMÉDIA',
-    category: 'Comédia / Curta',
-    duration: '10 min',
-    provider: 'mp4',
-    url: 'https://upload.wikimedia.org/wikipedia/commons/transcoded/c/c0/Big_Buck_Bunny_4K.webm/Big_Buck_Bunny_4K.webm.720p.vp9.webm',
-    badgeColor: '#22c55e',
-    posterBg: '#14532d',
-  },
-  {
-    title: 'Sintel — O Dragão Guardião',
-    posterTitle: 'SINTEL',
-    posterSub: 'FANTASIA ÉPICA • DRAGÕES',
-    category: 'Fantasia / Ação',
-    duration: '15 min',
-    provider: 'mp4',
-    url: 'https://mdn.github.io/learning-area/javascript/apis/video-audio/finished/video/sintel-short.mp4',
+    title: "Sintel — O Dragão Guardião",
+    posterTitle: "SINTEL",
+    posterSub: "FANTASIA ÉPICA • DRAGÕES",
+    category: "Fantasia / Ação",
+    duration: "15 min",
+    provider: 'youtube',
+    url: 'https://www.youtube.com/watch?v=eRsGyueVLvQ',
     badgeColor: '#f59e0b',
     posterBg: '#7c2d12',
   },
   {
-    title: 'Caminandes: Llamigos (Blender Studio)',
-    posterTitle: 'LLAMIGOS',
-    posterSub: 'AVENTURA 3D • HUMOR',
-    category: 'Animação HD',
-    duration: '3 min',
+    title: "Tears of Steel (Sci-Fi)",
+    posterTitle: "TEARS OF STEEL",
+    posterSub: "FICÇÃO CIENTÍFICA • ROBÔS",
+    category: "Ficção Científica",
+    duration: "12 min",
     provider: 'youtube',
-    url: 'https://www.youtube.com/watch?v=Z4C82eyhwgU',
+    url: 'https://www.youtube.com/watch?v=R6MlUcmOul8',
     badgeColor: '#0ea5e9',
     posterBg: '#0c4a6e',
   },
   {
-    title: 'Spring — O Espírito da Floresta (Blender)',
-    posterTitle: 'SPRING',
-    posterSub: 'FANTASIA • BLENDER OPEN MOVIE',
-    category: 'Fantasia / Curta',
-    duration: '8 min',
+    title: "Sprite Fright (Terror/Comédia)",
+    posterTitle: "SPRITE FRIGHT",
+    posterSub: "TERROR • COMÉDIA",
+    category: "Terror / Comédia",
+    duration: "10 min",
+    provider: 'youtube',
+    url: 'https://www.youtube.com/watch?v=_cMxraX_5RE',
+    badgeColor: '#ec4899',
+    posterBg: '#831843',
+  },
+  {
+    title: "Big Buck Bunny 4K 60fps",
+    posterTitle: "BIG BUCK BUNNY",
+    posterSub: "ANIMAÇÃO 3D • COMÉDIA",
+    category: "Comédia",
+    duration: "10 min",
+    provider: 'youtube',
+    url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ',
+    badgeColor: '#22c55e',
+    posterBg: '#14532d',
+  },
+  {
+    title: "Charge — Blender Open Movie",
+    posterTitle: "CHARGE",
+    posterSub: "CYBERPUNK • AÇÃO",
+    category: "Ação",
+    duration: "4 min",
+    provider: 'youtube',
+    url: 'https://www.youtube.com/watch?v=UXqq0ZvbOnk',
+    badgeColor: '#ef4444',
+    posterBg: '#7f1d1d',
+  },
+  {
+    title: "A Noite dos Mortos-Vivos (1968) — Filme Completo",
+    posterTitle: "NOITE DOS MORTOS",
+    posterSub: "TERROR CLÁSSICO • 1968",
+    category: "Filme Completo",
+    duration: "96 min",
+    provider: 'youtube',
+    url: 'https://www.youtube.com/watch?v=H91BxkBXttE',
+    badgeColor: '#a3a3a3',
+    posterBg: '#18181b',
+  },
+  {
+    title: "Spring — O Espírito da Floresta",
+    posterTitle: "SPRING",
+    posterSub: "FANTASIA • BLENDER",
+    category: "Fantasia",
+    duration: "8 min",
     provider: 'youtube',
     url: 'https://www.youtube.com/watch?v=WhWc3b3KhnY',
     badgeColor: '#a855f7',
     posterBg: '#4c1d95',
   },
   {
-    title: 'Charge — Cyberpunk Sci-Fi (Blender)',
-    posterTitle: 'CHARGE',
-    posterSub: 'CYBERPUNK • AÇÃO 4K',
-    category: 'Ficção Científica',
-    duration: '4 min',
+    title: "Cosmos Laundromat",
+    posterTitle: "COSMOS LAUNDROMAT",
+    posterSub: "DRAMA • SURREAL",
+    category: "Drama / Sci-Fi",
+    duration: "12 min",
     provider: 'youtube',
-    url: 'https://www.youtube.com/watch?v=UXqq0ZvbOnk',
-    badgeColor: '#ec4899',
-    posterBg: '#831843',
+    url: 'https://www.youtube.com/watch?v=Y-rmzh0PI3c',
+    badgeColor: '#14b8a6',
+    posterBg: '#134e4a',
   },
   {
-    title: 'Lofi Hip Hop Radio — Beats to Chill/Game',
-    posterTitle: 'LOFI RADIO',
-    posterSub: 'AO VIVO 24/7 • MÚSICA',
-    category: 'YouTube Ao Vivo',
-    duration: 'LIVE',
+    title: "Agent 327: Operation Barbershop",
+    posterTitle: "AGENT 327",
+    posterSub: "ESPIONAGEM • AÇÃO",
+    category: "Ação / Espionagem",
+    duration: "4 min",
+    provider: 'youtube',
+    url: 'https://www.youtube.com/watch?v=mN0zPOpADL4',
+    badgeColor: '#eab308',
+    posterBg: '#713f12',
+  },
+  {
+    title: "Elephants Dream",
+    posterTitle: "ELEPHANTS DREAM",
+    posterSub: "SURREAL • SCI-FI",
+    category: "Sci-Fi",
+    duration: "11 min",
+    provider: 'youtube',
+    url: 'https://www.youtube.com/watch?v=TLkA0RELQ1g',
+    badgeColor: '#6366f1',
+    posterBg: '#312e81',
+  },
+  {
+    title: "Caminandes 3: Llamigos",
+    posterTitle: "LLAMIGOS",
+    posterSub: "AVENTURA • HUMOR",
+    category: "Comédia",
+    duration: "3 min",
+    provider: 'youtube',
+    url: 'https://www.youtube.com/watch?v=SkVqJ1SGeL0',
+    badgeColor: '#84cc16',
+    posterBg: '#365314',
+  },
+  {
+    title: "Lofi Hip Hop Radio (Ao Vivo)",
+    posterTitle: "LOFI RADIO",
+    posterSub: "AO VIVO 24/7 • MÚSICA",
+    category: "YouTube Ao Vivo",
+    duration: "LIVE",
     provider: 'youtube',
     url: 'https://www.youtube.com/watch?v=jfKfPfyJRdk',
-    badgeColor: '#ef4444',
-    posterBg: '#7f1d1d',
+    badgeColor: '#f43f5e',
+    posterBg: '#881337',
   },
 ]
 
@@ -1039,14 +1105,23 @@ function createCinemaCharacterInstance(
       ? config.customModelUrl.trim()
       : presetModel.url
 
-  loadCachedGLTF(targetUrl)
+  const isVrmUrl = /\.vrm(\?|$)/i.test(targetUrl)
+  const loadPromise: Promise<GLTF> = isVrmUrl
+    ? new Promise<GLTF>((resolve, reject) => getGltfLoader().load(targetUrl, resolve, undefined, reject))
+    : loadCachedGLTF(targetUrl)
+
+  loadPromise
     .then((gltf) => {
       updateStatus(undefined)
       const vrm = gltf.userData?.vrm
       let clonedScene: THREE.Object3D
 
       if (vrm && vrm.scene) {
-        clonedScene = SkeletonUtils.clone(vrm.scene)
+        // Use the freshly loaded VRM scene directly (each instance loads its own copy)
+        clonedScene = vrm.scene
+        clonedScene.traverse((o) => {
+          o.frustumCulled = false
+        })
         instance.isVrm = true
         // VRM 0.x models face -Z by default; rotate if needed so all models face the same direction
         if (targetUrl.includes('ChatVRM')) {
@@ -1056,12 +1131,25 @@ function createCinemaCharacterInstance(
         clonedScene = SkeletonUtils.clone(gltf.scene)
       }
 
-      const box = new THREE.Box3().setFromObject(clonedScene)
-      const size = new THREE.Vector3()
-      box.getSize(size)
-      if (size.y > 0.01) {
-        const scale = 1.82 / size.y
-        clonedScene.scale.setScalar(scale)
+      try {
+        const box = new THREE.Box3()
+        clonedScene.traverse((o) => {
+          const m = o as THREE.Mesh
+          if (m.isMesh && m.geometry) {
+            m.geometry.computeBoundingBox()
+            if (m.geometry.boundingBox) {
+              o.updateMatrixWorld(true)
+              box.union(m.geometry.boundingBox.clone().applyMatrix4(o.matrixWorld))
+            }
+          }
+        })
+        const size = new THREE.Vector3()
+        box.getSize(size)
+        if (size.y > 0.3 && size.y < 500) {
+          clonedScene.scale.setScalar(1.82 / size.y)
+        }
+      } catch {
+        // keep original scale
       }
 
       const shirtColor = new THREE.Color(config.shirtColor || '#f97316')
@@ -1200,7 +1288,6 @@ export function WatchTogetherStage({
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const htmlVideoRef = useRef<HTMLVideoElement | null>(null)
   const liveStreamVideoRef = useRef<HTMLVideoElement | null>(null)
-  const videoTextureRef = useRef<THREE.VideoTexture | null>(null)
   const liveTextureRef = useRef<THREE.VideoTexture | null>(null)
   const isApplyingRemoteSyncRef = useRef(false)
 
@@ -1309,21 +1396,10 @@ export function WatchTogetherStage({
     }
   }, [liveScreenStream])
 
-  // Bind HTML5 MP4/WebM video onto true 3D THREE.VideoTexture & sync play/pause/seek!
+  // Sync HTML5 MP4/WebM video (rendered inside the fixed CSS3D screen) play/pause/seek!
   useEffect(() => {
     const vid = htmlVideoRef.current
-    if (!vid || !watchState || watchState.provider !== 'mp4') {
-      videoTextureRef.current = null
-      return
-    }
-
-    if (!videoTextureRef.current) {
-      const vTex = new THREE.VideoTexture(vid)
-      vTex.minFilter = THREE.LinearFilter
-      vTex.magFilter = THREE.LinearFilter
-      vTex.colorSpace = THREE.SRGBColorSpace
-      videoTextureRef.current = vTex
-    }
+    if (!vid || !watchState || watchState.provider !== 'mp4') return
 
     isApplyingRemoteSyncRef.current = true
     const elapsedSinceUpdate = watchState.isPlaying
@@ -1518,7 +1594,7 @@ export function WatchTogetherStage({
     scene.add(leftWall, rightWall, backWall)
 
     // 6 Glowing Framed Movie Posters along Left & Right Cinema Walls!
-    CATALOG_MOVIES.forEach((m, idx) => {
+    CATALOG_MOVIES.slice(0, 6).forEach((m, idx) => {
       const isLeft = idx < 3
       const slot = idx % 3
       const zPos = -8.5 + slot * 6.5
@@ -1711,20 +1787,12 @@ export function WatchTogetherStage({
       // 2. Update Fixed 3D Movie Screen Material (WebGL VideoTexture vs CSS3D 3D-Transformed Iframe)
       const ws = watchStateRef.current
       const hasLiveStream = Boolean(liveScreenStreamRef.current && liveTextureRef.current)
-      const isMp4Video = Boolean(ws?.active && ws.provider === 'mp4' && videoTextureRef.current)
-      const isIframeVideo = Boolean(ws?.active && ws.provider !== 'mp4' && !hasLiveStream)
+      const isIframeVideo = Boolean(ws?.active && !hasLiveStream)
 
       if (hasLiveStream && liveTextureRef.current) {
         screenSurface.visible = true
         if (screenMat.map !== liveTextureRef.current) {
           screenMat.map = liveTextureRef.current
-          screenMat.color.setHex(0xffffff)
-          screenMat.needsUpdate = true
-        }
-      } else if (isMp4Video && videoTextureRef.current) {
-        screenSurface.visible = true
-        if (screenMat.map !== videoTextureRef.current) {
-          screenMat.map = videoTextureRef.current
           screenMat.color.setHex(0xffffff)
           screenMat.needsUpdate = true
         }
@@ -2051,20 +2119,11 @@ export function WatchTogetherStage({
     })
   }
 
-  const isIframeActive = Boolean(
-    watchState?.active && watchState.provider !== 'mp4' && !liveScreenStream
-  )
+  const isIframeActive = Boolean(watchState?.active && !liveScreenStream)
 
   return (
     <div className="relative flex flex-1 flex-col overflow-hidden rounded-xl border border-[#232428] bg-[#06060b] select-none">
       {/* Hidden HTML5 Video Elements feeding the True 3D WebGL THREE.VideoTexture on the Cinema Wall! */}
-      <video
-        ref={htmlVideoRef}
-        src={watchState?.provider === 'mp4' ? watchState.embedUrl : undefined}
-        crossOrigin="anonymous"
-        playsInline
-        className="pointer-events-none fixed -top-[9999px] -left-[9999px] h-1 w-1 opacity-0"
-      />
       <video
         ref={liveStreamVideoRef}
         playsInline
@@ -2200,7 +2259,26 @@ export function WatchTogetherStage({
           }}
           className="overflow-hidden bg-black"
         >
-          {isIframeActive && watchState && (
+          {isIframeActive && watchState?.provider === 'mp4' && (
+            <video
+              ref={htmlVideoRef}
+              src={watchState.embedUrl}
+              controls
+              playsInline
+              onPlay={() => {
+                if (!isApplyingRemoteSyncRef.current && !watchState.isPlaying) {
+                  handleGlobalPlayPause(true)
+                }
+              }}
+              onPause={() => {
+                if (!isApplyingRemoteSyncRef.current && watchState.isPlaying) {
+                  handleGlobalPlayPause(false)
+                }
+              }}
+              className="h-full w-full bg-black object-contain"
+            />
+          )}
+          {isIframeActive && watchState && watchState.provider !== 'mp4' && (
             <iframe
               ref={iframeRef}
               src={watchState.embedUrl}
