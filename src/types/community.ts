@@ -179,4 +179,6 @@ export interface SignalPayload {
   cinemaPlayer?: CinemaPlayerState
   screenStreamId?: string | null
   webcamStreamId?: string | null
+  iceRestart?: boolean
+  resetConnection?: boolean
 }

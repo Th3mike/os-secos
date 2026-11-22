@@ -1380,10 +1380,24 @@ export function WatchTogetherStage({
       liveTextureRef.current = null
       return
     }
+
+    const ensurePlay = () => {
+      el.play().catch(() => {
+        el.muted = true
+        el.play().catch(() => {})
+      })
+    }
+
     if (el.srcObject !== liveScreenStream) {
       el.srcObject = liveScreenStream
-      el.play().catch(() => {})
     }
+    ensurePlay()
+
+    el.addEventListener('loadedmetadata', ensurePlay)
+    el.addEventListener('canplay', ensurePlay)
+    const videoTracks = liveScreenStream.getVideoTracks()
+    videoTracks.forEach((t) => t.addEventListener('unmute', ensurePlay))
+
     const vTex = new THREE.VideoTexture(el)
     vTex.minFilter = THREE.LinearFilter
     vTex.magFilter = THREE.LinearFilter
@@ -1391,6 +1405,9 @@ export function WatchTogetherStage({
     liveTextureRef.current = vTex
 
     return () => {
+      el.removeEventListener('loadedmetadata', ensurePlay)
+      el.removeEventListener('canplay', ensurePlay)
+      videoTracks.forEach((t) => t.removeEventListener('unmute', ensurePlay))
       vTex.dispose()
       liveTextureRef.current = null
     }
@@ -2126,8 +2143,9 @@ export function WatchTogetherStage({
       {/* Hidden HTML5 Video Elements feeding the True 3D WebGL THREE.VideoTexture on the Cinema Wall! */}
       <video
         ref={liveStreamVideoRef}
+        autoPlay
         playsInline
-        className="pointer-events-none fixed -top-[9999px] -left-[9999px] h-1 w-1 opacity-0"
+        className="pointer-events-none fixed right-0 bottom-0 h-[2px] w-[2px] opacity-[0.01]"
       />
 
       {/* TOP CINEMA 3D GAME BAR */}

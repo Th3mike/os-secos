@@ -13,7 +13,7 @@ import {
 import { playRoomEventSound } from '@/lib/soundEngine'
 import type { RealtimeChannel } from '@supabase/supabase-js'
 
-const ICE_SERVERS: RTCConfiguration = {
+const DEFAULT_ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
@@ -22,11 +22,14 @@ const ICE_SERVERS: RTCConfiguration = {
     { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
   ],
+  iceCandidatePoolSize: 4,
 }
 
 /**
- * Forces Hardware H.264 (NVENC / AMD AMF / Intel QuickSync) as the preferred video codec
- * so CPU-bound VP8 screen-content encoding never collapses a user's stream to 1 FPS!
+ * Prefers universally decodable H.264 Constrained Baseline (profile 42e01f) first,
+ * followed by VP9/VP8 and other H.264 profiles.
+ * Avoids forcing High Profile H.264 (640c1f/640032) ahead of compatible codecs,
+ * which causes black screens on Firefox / older Intel & AMD GPUs.
  */
 function preferHardwareH264Codec(pc: RTCPeerConnection) {
   try {
@@ -34,17 +37,25 @@ function preferHardwareH264Codec(pc: RTCPeerConnection) {
     const caps = RTCRtpSender.getCapabilities('video')
     if (!caps || !caps.codecs) return
 
-    const h264Codecs = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/h264')
-    const vp9Codecs = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/vp9')
-    const otherCodecs = caps.codecs.filter(
+    const baselineH264 = caps.codecs.filter(
       (c) =>
-        c.mimeType.toLowerCase() !== 'video/h264' &&
-        c.mimeType.toLowerCase() !== 'video/vp9'
+        c.mimeType.toLowerCase() === 'video/h264' &&
+        (c.sdpFmtpLine?.toLowerCase().includes('profile-level-id=42e01f') ||
+          c.sdpFmtpLine?.toLowerCase().includes('profile-level-id=42001f'))
     )
+    const otherH264 = caps.codecs.filter(
+      (c) => c.mimeType.toLowerCase() === 'video/h264' && !baselineH264.includes(c)
+    )
+    const vp9Codecs = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/vp9')
+    const vp8Codecs = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/vp8')
+    const otherCodecs = caps.codecs.filter((c) => {
+      const m = c.mimeType.toLowerCase()
+      return m !== 'video/h264' && m !== 'video/vp9' && m !== 'video/vp8'
+    })
 
-    if (h264Codecs.length === 0) return
+    if (baselineH264.length === 0 && otherH264.length === 0) return
 
-    const ordered = [...h264Codecs, ...vp9Codecs, ...otherCodecs]
+    const ordered = [...baselineH264, ...vp9Codecs, ...vp8Codecs, ...otherH264, ...otherCodecs]
     for (const transceiver of pc.getTransceivers()) {
       if (
         transceiver.sender.track?.kind === 'video' &&
@@ -58,26 +69,66 @@ function preferHardwareH264Codec(pc: RTCPeerConnection) {
   }
 }
 
-/**
- * Boosts WebRTC SDP bandwidth & Google WebRTC congestion control floor (`x-google-min-bitrate`, `x-google-start-bitrate`, `b=AS:`)
- * so Chromium never starts at 300kbps (540p) or collapses to 1 FPS!
- */
-function boostSdpVideoBandwidth(sdp: string, resolution: '720p' | '1080p' | '1440p', fps: number): string {
-  const maxKbps =
+function computePerPeerMaxKbps(
+  resolution: '720p' | '1080p' | '1440p',
+  fps: number,
+  peerCount: number
+): number {
+  const singlePeerMaxKbps =
     resolution === '1440p'
       ? fps === 120
-        ? 14000
-        : 10000
+        ? 12000
+        : 9000
       : resolution === '1080p'
         ? fps === 120
-          ? 9000
-          : 6500
-        : 4500
-  const startKbps = Math.round(maxKbps * 0.6)
-  // Keep minKbps at 800 kbps so users with 2-4 Mbps upload never suffer buffer bloat / 1 FPS drops!
-  const minKbps = 800
+          ? 8500
+          : 6000
+        : 4000
 
-  let lines = sdp.split('\r\n')
+  const count = Math.max(1, peerCount)
+  if (count === 1) return singlePeerMaxKbps
+  // Full-mesh P2P sends one stream per peer: share upload budget cleanly so
+  // 2nd/3rd viewers never suffer keyframe packet loss (black screen)!
+  const totalUploadBudgetKbps = 14000
+  return Math.max(1500, Math.min(singlePeerMaxKbps, Math.round(totalUploadBudgetKbps / count)))
+}
+
+/**
+ * Safely boosts WebRTC SDP video bandwidth ONLY on real video codec fmtp lines
+ * (VP8/VP9/H264/AV1) — NEVER touching RTX (`apt=`), RED, or ULPFEC lines, which
+ * would otherwise break packet retransmission or cause setRemoteDescription to fail!
+ */
+function boostSdpVideoBandwidth(
+  sdp: string,
+  resolution: '720p' | '1080p' | '1440p',
+  fps: number,
+  peerCount = 1
+): string {
+  const maxKbps = computePerPeerMaxKbps(resolution, fps, peerCount)
+  const startKbps = Math.min(2500, Math.round(maxKbps * 0.45))
+  const minKbps = 300
+
+  const lines = sdp.split('\r\n')
+  // First pass: identify payload types of actual video codecs (exclude rtx, red, ulpfec, flexfec)
+  const videoCodecPts = new Set<string>()
+  let inVideoScan = false
+  for (const line of lines) {
+    if (line.startsWith('m=video')) {
+      inVideoScan = true
+    } else if (line.startsWith('m=')) {
+      inVideoScan = false
+    } else if (inVideoScan && line.startsWith('a=rtpmap:')) {
+      const match = /^a=rtpmap:(\d+)\s+([a-zA-Z0-9_-]+)\//.exec(line)
+      if (match) {
+        const pt = match[1]
+        const codec = match[2].toLowerCase()
+        if (codec === 'h264' || codec === 'vp8' || codec === 'vp9' || codec === 'av1') {
+          videoCodecPts.add(pt)
+        }
+      }
+    }
+  }
+
   const out: string[] = []
   let inVideo = false
   let bandwidthAdded = false
@@ -91,21 +142,28 @@ function boostSdpVideoBandwidth(sdp: string, resolution: '720p' | '1080p' | '144
       inVideo = false
     }
 
+    // Replace existing b=AS in video section rather than duplicating it
+    if (inVideo && line.startsWith('b=AS:')) {
+      if (!bandwidthAdded) {
+        out.push(`b=AS:${maxKbps}`)
+        bandwidthAdded = true
+      }
+      continue
+    }
+
     out.push(line)
 
-    // Inject b=AS:<kbps> right after c=IN line inside m=video section
     if (inVideo && !bandwidthAdded && line.startsWith('c=IN')) {
       out.push(`b=AS:${maxKbps}`)
       bandwidthAdded = true
     }
 
-    // Add x-google-start-bitrate / x-google-min-bitrate to VP8/VP9/H264 fmtp lines
-    if (
-      inVideo &&
-      line.startsWith('a=fmtp:') &&
-      !line.includes('x-google-max-bitrate')
-    ) {
-      out[out.length - 1] = `${line};x-google-min-bitrate=${minKbps};x-google-start-bitrate=${startKbps};x-google-max-bitrate=${maxKbps}`
+    if (inVideo && line.startsWith('a=fmtp:') && !line.includes('x-google-max-bitrate')) {
+      const fmtpMatch = /^a=fmtp:(\d+)\s+(.+)$/.exec(line)
+      if (fmtpMatch && videoCodecPts.has(fmtpMatch[1]) && !fmtpMatch[2].includes('apt=')) {
+        out[out.length - 1] =
+          `${line};x-google-min-bitrate=${minKbps};x-google-start-bitrate=${startKbps};x-google-max-bitrate=${maxKbps}`
+      }
     }
   }
 
@@ -220,10 +278,15 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const [activePrank, setActivePrank] = useState<PrankEvent | null>(null)
   const [watchState, setWatchState] = useState<WatchTogetherState | null>(null)
   const [cinemaPlayers, setCinemaPlayers] = useState<Record<string, CinemaPlayerState>>({})
+  const [peerConnectionStates, setPeerConnectionStates] = useState<
+    Record<string, RTCPeerConnectionState>
+  >({})
+  const [hasTurnServer, setHasTurnServer] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
 
   const currentUserRef = useRef<UserProfile | null>(currentUser)
   const roomPeersRef = useRef<UserProfile[]>([])
+  const iceConfigRef = useRef<RTCConfiguration>(DEFAULT_ICE_SERVERS)
   const localStreamRef = useRef<MediaStream | null>(null)
   const localWebcamStreamRef = useRef<MediaStream | null>(null)
   const peerMediaIdsRef = useRef<
@@ -245,13 +308,38 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const watchStateRef = useRef<WatchTogetherState | null>(null)
   const myCinemaPlayerRef = useRef<CinemaPlayerState | null>(null)
   const pcsRef = useRef<Map<string, RTCPeerConnection>>(new Map())
+  const makingOfferRef = useRef<Set<string>>(new Set())
+  const peerSignalQueueRef = useRef<Map<string, Promise<void>>>(new Map())
   const pendingCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map())
   const peerLeaveTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const iceDisconnectedTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  const iceFailureCountsRef = useRef<Map<string, number>>(new Map())
   const reconnectDebounceRef = useRef<Map<string, number>>(new Map())
   const channelRef = useRef<RealtimeChannel | null>(null)
   const audioAnalyserIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const knownPeersRef = useRef<Set<string>>(new Set())
   const initialPresenceSyncedRef = useRef(false)
+
+  // Fetch dynamic ICE/TURN servers from backend API (falls back to STUN if TURN env vars not set)
+  useEffect(() => {
+    let active = true
+    fetch('/api/ice-servers', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { iceServers?: RTCIceServer[]; hasTurn?: boolean } | null) => {
+        if (!active || !data?.iceServers || data.iceServers.length === 0) return
+        iceConfigRef.current = {
+          iceServers: data.iceServers,
+          iceCandidatePoolSize: 4,
+        }
+        setHasTurnServer(Boolean(data.hasTurn))
+      })
+      .catch(() => {
+        // Keep DEFAULT_ICE_SERVERS fallback
+      })
+    return () => {
+      active = false
+    }
+  }, [])
 
   useEffect(() => {
     currentUserRef.current = currentUser
@@ -274,21 +362,39 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   }, [watchState])
 
   const cleanupPeer = useCallback((peerId: string) => {
-    // Clear any pending leave debounce timer
+    // Clear any pending leave / ICE disconnected timers
     const leaveTimer = peerLeaveTimersRef.current.get(peerId)
     if (leaveTimer) {
       clearTimeout(leaveTimer)
       peerLeaveTimersRef.current.delete(peerId)
     }
+    const discTimer = iceDisconnectedTimersRef.current.get(peerId)
+    if (discTimer) {
+      clearTimeout(discTimer)
+      iceDisconnectedTimersRef.current.delete(peerId)
+    }
     reconnectDebounceRef.current.delete(peerId)
+    iceFailureCountsRef.current.delete(peerId)
+    makingOfferRef.current.delete(peerId)
+    peerSignalQueueRef.current.delete(peerId)
 
     const pc = pcsRef.current.get(peerId)
     if (pc) {
+      pc.onicecandidate = null
+      pc.ontrack = null
+      pc.onconnectionstatechange = null
+      pc.oniceconnectionstatechange = null
       pc.close()
       pcsRef.current.delete(peerId)
     }
     pendingCandidatesRef.current.delete(peerId)
     peerMediaIdsRef.current.delete(peerId)
+    setPeerConnectionStates((prev) => {
+      if (!prev[peerId]) return prev
+      const copy = { ...prev }
+      delete copy[peerId]
+      return copy
+    })
     setRemoteStreams((prev) => {
       const hadStream = prev.some((item) => item.peerId === peerId)
       if (hadStream && !deafenedRef.current) {
@@ -312,6 +418,22 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     })
   }, [])
 
+  /**
+   * Serializes all async WebRTC signaling operations per peerId so concurrent
+   * offers/answers/candidates never race on the same RTCPeerConnection.
+   */
+  const enqueuePeerSignal = useCallback((peerId: string, task: () => Promise<void>) => {
+    const prev = peerSignalQueueRef.current.get(peerId) || Promise.resolve()
+    const next = prev
+      .catch(() => {})
+      .then(task)
+      .catch((err) => {
+        console.error(`WebRTC signaling error (${peerId}):`, err)
+      })
+    peerSignalQueueRef.current.set(peerId, next)
+    return next
+  }, [])
+
   const sendSignal = useCallback((payload: SignalPayload) => {
     if (channelRef.current && isSupabaseConfigured()) {
       channelRef.current.send({
@@ -323,12 +445,13 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   }, [])
 
   const getOrCreatePeerConnection = useCallback(
-    (targetPeerId: string, targetUser: UserProfile) => {
+    (targetPeerId: string, targetUser: UserProfile, forceNew = false) => {
       const me = currentUserRef.current
       if (!me) return null
 
       const existing = pcsRef.current.get(targetPeerId)
       if (
+        !forceNew &&
         existing &&
         existing.connectionState !== 'closed' &&
         existing.connectionState !== 'failed'
@@ -337,11 +460,21 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       }
 
       if (existing) {
+        existing.onicecandidate = null
+        existing.ontrack = null
+        existing.onconnectionstatechange = null
+        existing.oniceconnectionstatechange = null
         existing.close()
+        pcsRef.current.delete(targetPeerId)
+        pendingCandidatesRef.current.delete(targetPeerId)
       }
 
-      const pc = new RTCPeerConnection(ICE_SERVERS)
+      const pc = new RTCPeerConnection(iceConfigRef.current)
       pcsRef.current.set(targetPeerId, pc)
+      setPeerConnectionStates((prev) => ({
+        ...prev,
+        [targetPeerId]: pc.connectionState || 'new',
+      }))
 
       pc.onicecandidate = (event) => {
         const curMe = currentUserRef.current
@@ -358,15 +491,33 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
       pc.ontrack = (event) => {
         const track = event.track
+        if (track.readyState === 'ended') return
         const incomingStream = event.streams[0]
-        const freshStream = incomingStream
-          ? new MediaStream(incomingStream.getTracks())
-          : new MediaStream([track])
+        const mediaIds = peerMediaIdsRef.current.get(targetPeerId)
 
         if (track.kind === 'video') {
-          const mediaIds = peerMediaIdsRef.current.get(targetPeerId)
-          const isWebcam =
-            incomingStream && mediaIds?.webcamStreamId && incomingStream.id === mediaIds.webcamStreamId
+          const isWebcam = Boolean(
+            incomingStream &&
+              mediaIds?.webcamStreamId &&
+              incomingStream.id === mediaIds.webcamStreamId
+          )
+
+          // Ignore zombie/stale video transceivers from a previous screen share when we know the active screenStreamId
+          if (
+            !isWebcam &&
+            incomingStream &&
+            mediaIds?.screenStreamId &&
+            incomingStream.id !== mediaIds.screenStreamId
+          ) {
+            return
+          }
+
+          const liveTracks = incomingStream
+            ? incomingStream.getTracks().filter((t) => t.readyState !== 'ended')
+            : [track]
+          const freshStream = new MediaStream(
+            liveTracks.some((t) => t.id === track.id) ? liveTracks : [...liveTracks, track]
+          )
 
           if (isWebcam) {
             setRemoteWebcams((prev) => {
@@ -396,86 +547,162 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
               return [...prev, { peerId: targetPeerId, user: targetUser, stream: freshStream }]
             })
           }
+
+          track.addEventListener('ended', () => {
+            if (isWebcam) {
+              setRemoteWebcams((prev) =>
+                prev.filter(
+                  (item) =>
+                    item.peerId !== targetPeerId ||
+                    item.stream.getVideoTracks().some((t) => t.id !== track.id && t.readyState !== 'ended')
+                )
+              )
+            } else {
+              setRemoteStreams((prev) =>
+                prev.filter(
+                  (item) =>
+                    item.peerId !== targetPeerId ||
+                    item.stream.getVideoTracks().some((t) => t.id !== track.id && t.readyState !== 'ended')
+                )
+              )
+            }
+          })
         } else if (track.kind === 'audio') {
-          if (!incomingStream || incomingStream.getVideoTracks().length === 0) {
+          const isScreenAudio = Boolean(
+            incomingStream &&
+              (incomingStream.getVideoTracks().length > 0 ||
+                (mediaIds?.screenStreamId && incomingStream.id === mediaIds.screenStreamId))
+          )
+
+          if (isScreenAudio && incomingStream) {
+            // Attach screen-share audio track to the existing remote screen stream if audio arrived after video
+            const liveTracks = incomingStream.getTracks().filter((t) => t.readyState !== 'ended')
+            const combined = new MediaStream(
+              liveTracks.some((t) => t.id === track.id) ? liveTracks : [...liveTracks, track]
+            )
+            setRemoteStreams((prev) =>
+              prev.map((s) =>
+                s.peerId === targetPeerId ? { ...s, stream: combined } : s
+              )
+            )
+          } else {
+            const audioStream = new MediaStream([track])
             setRemoteAudios((prev) => {
               const exists = prev.some((s) => s.peerId === targetPeerId)
               if (exists) {
                 return prev.map((s) =>
                   s.peerId === targetPeerId
-                    ? { peerId: targetPeerId, user: targetUser, stream: freshStream }
+                    ? { peerId: targetPeerId, user: targetUser, stream: audioStream }
                     : s
                 )
               }
-              return [...prev, { peerId: targetPeerId, user: targetUser, stream: freshStream }]
+              return [...prev, { peerId: targetPeerId, user: targetUser, stream: audioStream }]
             })
           }
         }
       }
 
+      const requestIceRecovery = (forceReset: boolean) => {
+        const now = Date.now()
+        const lastAttempt = reconnectDebounceRef.current.get(targetPeerId) || 0
+        if (now - lastAttempt < 4000) return
+        reconnectDebounceRef.current.set(targetPeerId, now)
+
+        const curMe = currentUserRef.current
+        if (!curMe) return
+
+        if (forceReset) {
+          // Close local PC cleanly before requesting a brand-new offer from the peer
+          if (pcsRef.current.get(targetPeerId) === pc) {
+            pc.onicecandidate = null
+            pc.ontrack = null
+            pc.onconnectionstatechange = null
+            pc.oniceconnectionstatechange = null
+            pc.close()
+            pcsRef.current.delete(targetPeerId)
+            pendingCandidatesRef.current.delete(targetPeerId)
+          }
+        }
+
+        sendSignal({
+          type: 'request-stream',
+          from: curMe.id,
+          fromUser: curMe,
+          to: targetPeerId,
+          iceRestart: !forceReset,
+          resetConnection: forceReset,
+        })
+      }
+
       pc.onconnectionstatechange = () => {
-        if (pc.connectionState === 'closed') {
-          cleanupPeer(targetPeerId)
+        if (pcsRef.current.get(targetPeerId) !== pc) return
+        const state = pc.connectionState
+        setPeerConnectionStates((prev) => ({ ...prev, [targetPeerId]: state }))
+
+        if (state === 'connected') {
+          iceFailureCountsRef.current.delete(targetPeerId)
+          const discTimer = iceDisconnectedTimersRef.current.get(targetPeerId)
+          if (discTimer) {
+            clearTimeout(discTimer)
+            iceDisconnectedTimersRef.current.delete(targetPeerId)
+          }
           return
         }
 
-        if (pc.connectionState === 'failed') {
-          // Attempt graceful auto-recovery instead of instantly killing the stream!
-          const now = Date.now()
-          const lastAttempt = reconnectDebounceRef.current.get(targetPeerId) || 0
-          if (now - lastAttempt > 4000) {
-            reconnectDebounceRef.current.set(targetPeerId, now)
-            try {
-              if (typeof pc.restartIce === 'function') {
-                pc.restartIce()
-              }
-            } catch {
-              // ignore
-            }
-            const curMe = currentUserRef.current
-            if (curMe) {
-              sendSignal({
-                type: 'request-stream',
-                from: curMe.id,
-                fromUser: curMe,
-                to: targetPeerId,
-              })
-            }
-          } else {
-            cleanupPeer(targetPeerId)
-          }
+        if (state === 'closed') {
+          return
+        }
+
+        if (state === 'failed') {
+          const fails = (iceFailureCountsRef.current.get(targetPeerId) || 0) + 1
+          iceFailureCountsRef.current.set(targetPeerId, fails)
+          // 1st failure: try ICE restart; 2nd+ failure: full clean peer rebuild
+          requestIceRecovery(fails >= 2)
         }
       }
 
       pc.oniceconnectionstatechange = () => {
-        if (pc.iceConnectionState === 'failed') {
-          const now = Date.now()
-          const lastAttempt = reconnectDebounceRef.current.get(targetPeerId) || 0
-          if (now - lastAttempt > 4000) {
-            reconnectDebounceRef.current.set(targetPeerId, now)
-            try {
-              if (typeof pc.restartIce === 'function') {
-                pc.restartIce()
-              }
-            } catch {
-              // ignore
-            }
-            const curMe = currentUserRef.current
-            if (curMe) {
-              sendSignal({
-                type: 'request-stream',
-                from: curMe.id,
-                fromUser: curMe,
-                to: targetPeerId,
-              })
-            }
+        if (pcsRef.current.get(targetPeerId) !== pc) return
+        const iceState = pc.iceConnectionState
+
+        if (iceState === 'connected' || iceState === 'completed') {
+          iceFailureCountsRef.current.delete(targetPeerId)
+          setPeerConnectionStates((prev) => ({ ...prev, [targetPeerId]: 'connected' }))
+          const discTimer = iceDisconnectedTimersRef.current.get(targetPeerId)
+          if (discTimer) {
+            clearTimeout(discTimer)
+            iceDisconnectedTimersRef.current.delete(targetPeerId)
           }
+          return
+        }
+
+        if (iceState === 'disconnected') {
+          if (!iceDisconnectedTimersRef.current.has(targetPeerId)) {
+            const timer = setTimeout(() => {
+              iceDisconnectedTimersRef.current.delete(targetPeerId)
+              if (
+                pcsRef.current.get(targetPeerId) === pc &&
+                (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed')
+              ) {
+                requestIceRecovery(false)
+              }
+            }, 5000)
+            iceDisconnectedTimersRef.current.set(targetPeerId, timer)
+          }
+          return
+        }
+
+        if (iceState === 'failed') {
+          setPeerConnectionStates((prev) => ({ ...prev, [targetPeerId]: 'failed' }))
+          const fails = (iceFailureCountsRef.current.get(targetPeerId) || 0) + 1
+          iceFailureCountsRef.current.set(targetPeerId, fails)
+          requestIceRecovery(fails >= 2)
         }
       }
 
       return pc
     },
-    [cleanupPeer, sendSignal]
+    [sendSignal]
   )
 
   const flushPendingCandidates = useCallback(async (peerId: string, pc: RTCPeerConnection) => {
@@ -493,13 +720,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
   const applySenderHighQualityParameters = useCallback(async (pc: RTCPeerConnection) => {
     const opts = shareOptionsRef.current
-    const screenBaseBps =
-      opts.resolution === '1440p'
-        ? 12_000_000
-        : opts.resolution === '1080p'
-          ? 7_500_000
-          : 4_500_000
-    const screenMaxBitrate = opts.fps === 120 ? Math.round(screenBaseBps * 1.3) : screenBaseBps
+    const activePeerCount = Math.max(1, pcsRef.current.size)
+    const screenMaxBitrate = computePerPeerMaxKbps(opts.resolution, opts.fps, activePeerCount) * 1000
     const webcamTrackId = localWebcamStreamRef.current?.getVideoTracks()[0]?.id
 
     preferHardwareH264Codec(pc)
@@ -512,13 +734,13 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           if (!params.encodings || params.encodings.length === 0) {
             params.encodings = [{}]
           }
-          // Webcam gets dedicated 4.5 Mbps @ 60 FPS; Screen Share gets up to 15 Mbps @ 60/120 FPS
-          params.encodings[0].maxBitrate = isWebcamTrack ? 4_500_000 : screenMaxBitrate
+          // Webcam gets up to 2.5-4 Mbps @ 60 FPS; Screen Share scales gracefully with peer count
+          const webcamMaxBitrate = activePeerCount > 2 ? 2_000_000 : 3_500_000
+          params.encodings[0].maxBitrate = isWebcamTrack ? webcamMaxBitrate : screenMaxBitrate
           params.encodings[0].maxFramerate = isWebcamTrack ? 60 : opts.fps
           params.encodings[0].scaleResolutionDownBy = 1.0
           params.encodings[0].priority = 'high'
           params.encodings[0].networkPriority = 'high'
-          // ALWAYS 'maintain-framerate' so WebRTC NEVER drops to 1 FPS for any user!
           ;(params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference =
             'maintain-framerate'
           await sender.setParameters(params)
@@ -530,17 +752,42 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   }, [])
 
   const syncTracksAndOffer = useCallback(
-    async (targetPeerId: string, targetUser: UserProfile) => {
+    async (
+      targetPeerId: string,
+      targetUser: UserProfile,
+      options?: { iceRestart?: boolean; resetConnection?: boolean }
+    ) => {
       const me = currentUserRef.current
       if (!me || targetPeerId === me.id) return
 
-      const pc = getOrCreatePeerConnection(targetPeerId, targetUser)
+      const hasAnyLocalMedia = Boolean(
+        localStreamRef.current || localWebcamStreamRef.current || micStreamRef.current
+      )
+      if (!hasAnyLocalMedia && !pcsRef.current.has(targetPeerId)) return
+
+      const pc = getOrCreatePeerConnection(
+        targetPeerId,
+        targetUser,
+        Boolean(options?.resetConnection)
+      )
       if (!pc) return
+
+      // Clean up any dead/ended senders before adding live tracks
+      for (const sender of pc.getSenders()) {
+        if (sender.track && sender.track.readyState === 'ended') {
+          try {
+            pc.removeTrack(sender)
+          } catch {
+            // ignore
+          }
+        }
+      }
 
       const existingSenders = pc.getSenders()
 
       if (localStreamRef.current) {
         localStreamRef.current.getTracks().forEach((track) => {
+          if (track.readyState === 'ended') return
           const alreadyAdded = existingSenders.some((s) => s.track?.id === track.id)
           if (!alreadyAdded) {
             pc.addTrack(track, localStreamRef.current!)
@@ -550,6 +797,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
       if (localWebcamStreamRef.current) {
         localWebcamStreamRef.current.getVideoTracks().forEach((track) => {
+          if (track.readyState === 'ended') return
           const alreadyAdded = existingSenders.some((s) => s.track?.id === track.id)
           if (!alreadyAdded) {
             pc.addTrack(track, localWebcamStreamRef.current!)
@@ -559,6 +807,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
       if (micStreamRef.current) {
         micStreamRef.current.getAudioTracks().forEach((track) => {
+          if (track.readyState === 'ended') return
           const alreadyAdded = existingSenders.some((s) => s.track?.id === track.id)
           if (!alreadyAdded) {
             pc.addTrack(track, micStreamRef.current!)
@@ -568,22 +817,37 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
       await applySenderHighQualityParameters(pc)
 
-      const offer = await pc.createOffer()
-      const opts = shareOptionsRef.current
-      const boostedOffer: RTCSessionDescriptionInit = {
-        type: offer.type,
-        sdp: offer.sdp ? boostSdpVideoBandwidth(offer.sdp, opts.resolution, opts.fps) : offer.sdp,
+      makingOfferRef.current.add(targetPeerId)
+      try {
+        const offer = await pc.createOffer(
+          options?.iceRestart ? { iceRestart: true } : undefined
+        )
+        const opts = shareOptionsRef.current
+        const peerCount = Math.max(1, pcsRef.current.size)
+        const boostedOffer: RTCSessionDescriptionInit = {
+          type: offer.type,
+          sdp: offer.sdp
+            ? boostSdpVideoBandwidth(offer.sdp, opts.resolution, opts.fps, peerCount)
+            : offer.sdp,
+        }
+        try {
+          await pc.setLocalDescription(boostedOffer)
+        } catch {
+          // Fallback to unmodified offer SDP if browser rejects custom bandwidth fmtp
+          await pc.setLocalDescription(offer)
+        }
+        sendSignal({
+          type: 'offer',
+          from: me.id,
+          fromUser: me,
+          to: targetPeerId,
+          sdp: pc.localDescription!,
+          screenStreamId: localStreamRef.current?.id || null,
+          webcamStreamId: localWebcamStreamRef.current?.id || null,
+        })
+      } finally {
+        makingOfferRef.current.delete(targetPeerId)
       }
-      await pc.setLocalDescription(boostedOffer)
-      sendSignal({
-        type: 'offer',
-        from: me.id,
-        fromUser: me,
-        to: targetPeerId,
-        sdp: pc.localDescription!,
-        screenStreamId: localStreamRef.current?.id || null,
-        webcamStreamId: localWebcamStreamRef.current?.id || null,
-      })
     },
     [applySenderHighQualityParameters, getOrCreatePeerConnection, sendSignal]
   )
@@ -591,11 +855,50 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   const renegotiateAllPeers = useCallback(async () => {
     const me = currentUserRef.current
     if (!me) return
+    const peerMap = new Map<string, UserProfile>()
     for (const peer of roomPeersRef.current) {
-      if (peer.id === me.id) continue
-      await syncTracksAndOffer(peer.id, peer)
+      if (peer.id !== me.id) {
+        peerMap.set(peer.id, peer)
+      }
     }
-  }, [syncTracksAndOffer])
+    // Negotiate with all peers in parallel with per-peer error isolation so
+    // one failing peer NEVER blocks other viewers from receiving the screen!
+    await Promise.allSettled(
+      Array.from(peerMap.values()).map((peer) =>
+        enqueuePeerSignal(peer.id, () => syncTracksAndOffer(peer.id, peer))
+      )
+    )
+  }, [enqueuePeerSignal, syncTracksAndOffer])
+
+  const reconnectPeerStream = useCallback(
+    (peerId: string) => {
+      const me = currentUserRef.current
+      if (!me || peerId === me.id) return
+      enqueuePeerSignal(peerId, async () => {
+        const pc = pcsRef.current.get(peerId)
+        if (pc) {
+          pc.onicecandidate = null
+          pc.ontrack = null
+          pc.onconnectionstatechange = null
+          pc.oniceconnectionstatechange = null
+          pc.close()
+          pcsRef.current.delete(peerId)
+        }
+        pendingCandidatesRef.current.delete(peerId)
+        iceFailureCountsRef.current.delete(peerId)
+        setPeerConnectionStates((prev) => ({ ...prev, [peerId]: 'connecting' }))
+
+        sendSignal({
+          type: 'request-stream',
+          from: me.id,
+          fromUser: me,
+          to: peerId,
+          resetConnection: true,
+        })
+      })
+    },
+    [enqueuePeerSignal, sendSignal]
+  )
 
   const currentUserId = currentUser?.id
 
@@ -660,34 +963,92 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         initialPresenceSyncedRef.current = true
         setRoomPeers(users)
       })
-      .on('broadcast', { event: 'webrtc-signal' }, async ({ payload }) => {
+      .on('broadcast', { event: 'webrtc-signal' }, ({ payload }) => {
         const sig = payload as SignalPayload
         const curMe = currentUserRef.current
         if (!curMe || sig.from === curMe.id) return
         if (sig.to && sig.to !== curMe.id) return
 
-        try {
+        // Non-WebRTC room state signals can be handled immediately without touching RTCPeerConnection
+        if (sig.type === 'stop-stream') {
+          setRemoteStreams((prev) => prev.filter((item) => item.peerId !== sig.from))
+          if (!deafenedRef.current) {
+            playRoomEventSound('stream-stop')
+          }
+          return
+        } else if (sig.type === 'stop-webcam') {
+          setRemoteWebcams((prev) => prev.filter((item) => item.peerId !== sig.from))
+          return
+        } else if (sig.type === 'speaking-state') {
+          setSpeakingPeers((prev) => ({
+            ...prev,
+            [sig.from]: Boolean(sig.isSpeaking),
+          }))
+          return
+        } else if (sig.type === 'mute-state') {
+          setPeerMuteStates((prev) => ({
+            ...prev,
+            [sig.from]: {
+              isMuted: Boolean(sig.isMuted),
+              isDeafened: Boolean(sig.isDeafened),
+            },
+          }))
+          return
+        } else if (sig.type === 'watching-state') {
+          setPeerWatchingMap((prev) => ({
+            ...prev,
+            [sig.from]: {
+              user: sig.fromUser,
+              watchingIds: Array.isArray(sig.watchingIds) ? sig.watchingIds : [],
+            },
+          }))
+          return
+        } else if (sig.type === 'prank' && sig.prank) {
+          setActivePrank(sig.prank)
+          if (!deafenedRef.current) {
+            playRoomEventSound(`prank-${sig.prank.type}`)
+          }
+          return
+        } else if (sig.type === 'watch-sync') {
+          setWatchState(sig.watchState || null)
+          return
+        } else if (sig.type === 'cinema-state' && sig.cinemaPlayer) {
+          setCinemaPlayers((prev) => ({
+            ...prev,
+            [sig.from]: sig.cinemaPlayer!,
+          }))
+          return
+        }
+
+        // Serialize WebRTC peer signaling per peerId to prevent race conditions & glare
+        enqueuePeerSignal(sig.from, async () => {
+          const activeMe = currentUserRef.current
+          if (!activeMe) return
+
           if (sig.type === 'request-stream') {
             if (
               localStreamRef.current ||
               localWebcamStreamRef.current ||
               micStreamRef.current
             ) {
-              await syncTracksAndOffer(sig.from, sig.fromUser)
+              await syncTracksAndOffer(sig.from, sig.fromUser, {
+                iceRestart: Boolean(sig.iceRestart),
+                resetConnection: Boolean(sig.resetConnection),
+              })
             }
             if (watchStateRef.current) {
               sendSignal({
                 type: 'watch-sync',
-                from: curMe.id,
-                fromUser: curMe,
+                from: activeMe.id,
+                fromUser: activeMe,
                 to: sig.from,
                 watchState: watchStateRef.current,
               })
             }
             sendSignal({
               type: 'mute-state',
-              from: curMe.id,
-              fromUser: curMe,
+              from: activeMe.id,
+              fromUser: activeMe,
               to: sig.from,
               isMuted: !micEnabledRef.current,
               isDeafened: deafenedRef.current,
@@ -695,8 +1056,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             if (myWatchingIdsRef.current.length > 0) {
               sendSignal({
                 type: 'watching-state',
-                from: curMe.id,
-                fromUser: curMe,
+                from: activeMe.id,
+                fromUser: activeMe,
                 to: sig.from,
                 watchingIds: myWatchingIdsRef.current,
               })
@@ -704,8 +1065,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             if (myCinemaPlayerRef.current) {
               sendSignal({
                 type: 'cinema-state',
-                from: curMe.id,
-                fromUser: curMe,
+                from: activeMe.id,
+                fromUser: activeMe,
                 to: sig.from,
                 cinemaPlayer: myCinemaPlayerRef.current,
               })
@@ -719,7 +1080,24 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             }
             const pc = getOrCreatePeerConnection(sig.from, sig.fromUser)
             if (!pc) return
-            if (pc.signalingState !== 'stable') {
+
+            // Deterministic Perfect Negotiation (polite vs impolite) so glare never drops a screen share!
+            const isPolite = activeMe.id < sig.from
+            const offerCollision =
+              makingOfferRef.current.has(sig.from) || pc.signalingState !== 'stable'
+
+            if (offerCollision && !isPolite) {
+              // Impolite peer keeps its own offer in flight; polite peer will accept ours.
+              return
+            }
+
+            const hadLocalMedia = Boolean(
+              localStreamRef.current ||
+                localWebcamStreamRef.current ||
+                micStreamRef.current
+            )
+
+            if (offerCollision) {
               await Promise.all([
                 pc.setLocalDescription({ type: 'rollback' }),
                 pc.setRemoteDescription(new RTCSessionDescription(sig.sdp)),
@@ -727,25 +1105,44 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             } else {
               await pc.setRemoteDescription(new RTCSessionDescription(sig.sdp))
             }
+
             await flushPendingCandidates(sig.from, pc)
             const answer = await pc.createAnswer()
-            const opts = shareOptionsRef.current
-            const boostedAnswer: RTCSessionDescriptionInit = {
-              type: answer.type,
-              sdp: answer.sdp
-                ? boostSdpVideoBandwidth(answer.sdp, opts.resolution, opts.fps)
-                : answer.sdp,
-            }
-            await pc.setLocalDescription(boostedAnswer)
+            await pc.setLocalDescription(answer)
+
             sendSignal({
               type: 'answer',
-              from: curMe.id,
-              fromUser: curMe,
+              from: activeMe.id,
+              fromUser: activeMe,
               to: sig.from,
               sdp: pc.localDescription!,
               screenStreamId: localStreamRef.current?.id || null,
               webcamStreamId: localWebcamStreamRef.current?.id || null,
             })
+
+            // If we were polite and rolled back our own offer (or have local tracks not yet sent on this PC),
+            // immediately re-offer our local screen/webcam/mic tracks now that signalingState is stable!
+            if (hadLocalMedia) {
+              const senders = pc.getSenders()
+              const hasUnsentScreen = Boolean(
+                localStreamRef.current
+                  ?.getTracks()
+                  .some((t) => t.readyState !== 'ended' && !senders.some((s) => s.track?.id === t.id))
+              )
+              const hasUnsentWebcam = Boolean(
+                localWebcamStreamRef.current
+                  ?.getVideoTracks()
+                  .some((t) => t.readyState !== 'ended' && !senders.some((s) => s.track?.id === t.id))
+              )
+              const hasUnsentMic = Boolean(
+                micStreamRef.current
+                  ?.getAudioTracks()
+                  .some((t) => t.readyState !== 'ended' && !senders.some((s) => s.track?.id === t.id))
+              )
+              if (offerCollision || hasUnsentScreen || hasUnsentWebcam || hasUnsentMic) {
+                await syncTracksAndOffer(sig.from, sig.fromUser)
+              }
+            }
           } else if (sig.type === 'answer' && sig.sdp) {
             if (sig.screenStreamId !== undefined || sig.webcamStreamId !== undefined) {
               peerMediaIdsRef.current.set(sig.from, {
@@ -762,57 +1159,19 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           } else if (sig.type === 'ice-candidate' && sig.candidate) {
             const pc = pcsRef.current.get(sig.from)
             if (pc && pc.remoteDescription && pc.remoteDescription.type) {
-              await pc.addIceCandidate(new RTCIceCandidate(sig.candidate))
+              try {
+                await pc.addIceCandidate(new RTCIceCandidate(sig.candidate))
+              } catch {
+                // Ignore stale ICE candidate
+              }
             } else {
               // Queue candidate until remoteDescription is set!
               const list = pendingCandidatesRef.current.get(sig.from) || []
               list.push(sig.candidate)
               pendingCandidatesRef.current.set(sig.from, list)
             }
-          } else if (sig.type === 'stop-stream') {
-            setRemoteStreams((prev) => prev.filter((item) => item.peerId !== sig.from))
-            if (!deafenedRef.current) {
-              playRoomEventSound('stream-stop')
-            }
-          } else if (sig.type === 'stop-webcam') {
-            setRemoteWebcams((prev) => prev.filter((item) => item.peerId !== sig.from))
-          } else if (sig.type === 'speaking-state') {
-            setSpeakingPeers((prev) => ({
-              ...prev,
-              [sig.from]: Boolean(sig.isSpeaking),
-            }))
-          } else if (sig.type === 'mute-state') {
-            setPeerMuteStates((prev) => ({
-              ...prev,
-              [sig.from]: {
-                isMuted: Boolean(sig.isMuted),
-                isDeafened: Boolean(sig.isDeafened),
-              },
-            }))
-          } else if (sig.type === 'watching-state') {
-            setPeerWatchingMap((prev) => ({
-              ...prev,
-              [sig.from]: {
-                user: sig.fromUser,
-                watchingIds: Array.isArray(sig.watchingIds) ? sig.watchingIds : [],
-              },
-            }))
-          } else if (sig.type === 'prank' && sig.prank) {
-            setActivePrank(sig.prank)
-            if (!deafenedRef.current) {
-              playRoomEventSound(`prank-${sig.prank.type}`)
-            }
-          } else if (sig.type === 'watch-sync') {
-            setWatchState(sig.watchState || null)
-          } else if (sig.type === 'cinema-state' && sig.cinemaPlayer) {
-            setCinemaPlayers((prev) => ({
-              ...prev,
-              [sig.from]: sig.cinemaPlayer!,
-            }))
           }
-        } catch (err) {
-          console.error('Signal error:', err)
-        }
+        })
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
@@ -843,11 +1202,17 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     return () => {
       peerLeaveTimersRef.current.forEach((t) => clearTimeout(t))
       peerLeaveTimersRef.current.clear()
+      iceDisconnectedTimersRef.current.forEach((t) => clearTimeout(t))
+      iceDisconnectedTimersRef.current.clear()
+      iceFailureCountsRef.current.clear()
+      makingOfferRef.current.clear()
+      peerSignalQueueRef.current.clear()
       reconnectDebounceRef.current.clear()
       pcsMap.forEach((pc) => pc.close())
       pcsMap.clear()
       pendingCandidatesRef.current.clear()
       peerMediaIdsRef.current.clear()
+      setPeerConnectionStates({})
       setRemoteStreams([])
       setRemoteWebcams([])
       setRemoteAudios([])
@@ -861,6 +1226,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     currentUserId,
     applySenderHighQualityParameters,
     cleanupPeer,
+    enqueuePeerSignal,
     flushPendingCandidates,
     getOrCreatePeerConnection,
     sendSignal,
@@ -873,7 +1239,13 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       localStreamRef.current.getTracks().forEach((track) => {
         pcsRef.current.forEach((pc) => {
           const sender = pc.getSenders().find((s) => s.track?.id === track.id)
-          if (sender) pc.removeTrack(sender)
+          if (sender) {
+            try {
+              pc.removeTrack(sender)
+            } catch {
+              // ignore
+            }
+          }
         })
         track.stop()
       })
@@ -899,8 +1271,10 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           isDeafened: deafenedRef.current,
         })
       }
+      // Renegotiate cleanly so receivers don't keep dead video transceivers on future shares
+      renegotiateAllPeers().catch(() => {})
     }
-  }, [sendSignal])
+  }, [renegotiateAllPeers, sendSignal])
 
   const startScreenShare = useCallback(
     async (
@@ -916,10 +1290,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       const widthMap = { '720p': 1280, '1080p': 1920, '1440p': 2560 }
 
       try {
-        if (localStreamRef.current) {
-          localStreamRef.current.getTracks().forEach((t) => t.stop())
-        }
-
+        // Capture the new screen first so cancelling the picker doesn't kill an existing live stream
         const stream = await navigator.mediaDevices.getDisplayMedia({
           video: {
             width: { ideal: widthMap[options.resolution] },
@@ -934,6 +1305,24 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
               }
             : false,
         })
+
+        // Cleanly remove previous screen share senders from all PCs before stopping old tracks
+        if (localStreamRef.current) {
+          localStreamRef.current.getTracks().forEach((oldTrack) => {
+            oldTrack.onended = null
+            pcsRef.current.forEach((pc) => {
+              const sender = pc.getSenders().find((s) => s.track?.id === oldTrack.id)
+              if (sender) {
+                try {
+                  pc.removeTrack(sender)
+                } catch {
+                  // ignore
+                }
+              }
+            })
+            oldTrack.stop()
+          })
+        }
 
         const [videoTrack] = stream.getVideoTracks()
         if (videoTrack) {
@@ -1511,6 +1900,9 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     cinemaPlayers,
     broadcastCinemaState,
     triggerPrank,
+    peerConnectionStates,
+    hasTurnServer,
+    reconnectPeerStream,
     error,
     startScreenShare,
     stopScreenShare,

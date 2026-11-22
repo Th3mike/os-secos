@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Eye } from 'lucide-react'
+import { Eye, RefreshCw, WifiOff } from 'lucide-react'
 import { UserProfile } from '@/types/community'
 
 interface VideoStageProps {
@@ -14,6 +14,9 @@ interface VideoStageProps {
   targetFps?: number
   targetResolution?: '720p' | '1080p' | '1440p'
   viewers?: UserProfile[]
+  connectionState?: RTCPeerConnectionState
+  hasTurnServer?: boolean
+  onReconnect?: () => void
   onToggleFocus?: () => void
 }
 
@@ -27,6 +30,9 @@ export function VideoStage({
   targetFps,
   targetResolution,
   viewers = [],
+  connectionState,
+  hasTurnServer = false,
+  onReconnect,
   onToggleFocus,
 }: VideoStageProps) {
   const videoRef = useRef<HTMLVideoElement | null>(null)
@@ -35,11 +41,13 @@ export function VideoStage({
   const [volume, setVolume] = useState(1)
   const [showViewersPopover, setShowViewersPopover] = useState(false)
   const [pauseLocalPreview, setPauseLocalPreview] = useState(false)
+  const [hasVideoFrames, setHasVideoFrames] = useState(isLocal)
+  const [stalledWaiting, setStalledWaiting] = useState(false)
   const [liveStats, setLiveStats] = useState<{
     width: number
     height: number
     fps: number
-  }>({ width: 1920, height: 1080, fps: 60 })
+  }>({ width: 0, height: 0, fps: 0 })
 
   useEffect(() => {
     const videoEl = videoRef.current
@@ -60,8 +68,21 @@ export function VideoStage({
     const updateMetadataStats = () => {
       // Never call videoTrack.getSettings() on a timer! On Windows Edge/Chromium,
       // querying WGC/DXGI track settings wakes up DWM/explorer.exe. Read videoWidth/videoHeight from the DOM element only.
+      const w = videoEl.videoWidth || 0
+      const h = videoEl.videoHeight || 0
+      const receiving = isLocal || (w > 0 && h > 0)
+      setHasVideoFrames(receiving)
+      if (receiving) {
+        setStalledWaiting(false)
+      }
+
+      if (!receiving && !isLocal) {
+        setLiveStats({ width: 0, height: 0, fps: 0 })
+        return
+      }
+
       const configuredFps = targetFps || 60
-      const rawHeight = videoEl.videoHeight || 1080
+      const rawHeight = h || 1080
       const stableHeight =
         targetResolution === '1440p'
           ? 1440
@@ -78,7 +99,7 @@ export function VideoStage({
                     : 1080
 
       setLiveStats({
-        width: videoEl.videoWidth || 1920,
+        width: w || 1920,
         height: stableHeight,
         fps: configuredFps,
       })
@@ -87,27 +108,44 @@ export function VideoStage({
     ensurePlay()
     updateMetadataStats()
 
-    const handleLoadedMetadata = () => {
+    const handleFrameReady = () => {
       ensurePlay()
       updateMetadataStats()
     }
 
-    videoEl.addEventListener('loadedmetadata', handleLoadedMetadata)
+    videoEl.addEventListener('loadedmetadata', handleFrameReady)
+    videoEl.addEventListener('loadeddata', handleFrameReady)
+    videoEl.addEventListener('canplay', handleFrameReady)
+    videoEl.addEventListener('playing', updateMetadataStats)
     videoEl.addEventListener('resize', updateMetadataStats)
 
     const tracks = stream.getVideoTracks()
     tracks.forEach((t) => {
-      t.onunmute = ensurePlay
+      t.addEventListener('unmute', handleFrameReady)
     })
 
+    // If a remote stream still has 0x0 video frames after 4 seconds, surface reconnect controls
+    let stallTimer: ReturnType<typeof setTimeout> | null = null
+    if (!isLocal && (videoEl.videoWidth === 0 || videoEl.videoHeight === 0)) {
+      stallTimer = setTimeout(() => {
+        if (videoRef.current && (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0)) {
+          setStalledWaiting(true)
+        }
+      }, 4000)
+    }
+
     return () => {
-      videoEl.removeEventListener('loadedmetadata', handleLoadedMetadata)
+      if (stallTimer) clearTimeout(stallTimer)
+      videoEl.removeEventListener('loadedmetadata', handleFrameReady)
+      videoEl.removeEventListener('loadeddata', handleFrameReady)
+      videoEl.removeEventListener('canplay', handleFrameReady)
+      videoEl.removeEventListener('playing', updateMetadataStats)
       videoEl.removeEventListener('resize', updateMetadataStats)
       tracks.forEach((t) => {
-        t.onunmute = null
+        t.removeEventListener('unmute', handleFrameReady)
       })
     }
-  }, [stream, targetFps, targetResolution, pauseLocalPreview])
+  }, [stream, isLocal, targetFps, targetResolution, pauseLocalPreview])
 
   const handleFullscreen = () => {
     if (!containerRef.current) return
@@ -285,14 +323,58 @@ export function VideoStage({
           </button>
         </div>
       ) : (
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted={isLocal || muted || deafened}
-          onClick={onToggleFocus}
-          className="h-full w-full flex-1 cursor-pointer bg-black object-contain"
-        />
+        <div className="relative flex h-full w-full flex-1 bg-black">
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted={isLocal || muted || deafened}
+            onClick={onToggleFocus}
+            className="h-full w-full flex-1 cursor-pointer bg-black object-contain"
+          />
+
+          {/* Connecting / Stalled Overlay so remote viewers never stare at a silent black screen */}
+          {!isLocal && !hasVideoFrames && (
+            <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-[#0d0e12]/90 p-5 text-center">
+              {connectionState === 'failed' || stalledWaiting ? (
+                <>
+                  <WifiOff className="mb-2 h-8 w-8 text-amber-400" />
+                  <p className="text-sm font-bold text-white">
+                    {connectionState === 'failed'
+                      ? 'Falha ao receber o vídeo (bloqueio de rede/NAT)'
+                      : `Aguardando vídeo de ${user.username}...`}
+                  </p>
+                  <p className="mt-1 max-w-sm text-xs text-zinc-400">
+                    {!hasTurnServer
+                      ? 'A conexão direta P2P pode estar sendo bloqueada por CGNAT/NAT simétrico. Tente reconectar ou configure um servidor TURN.'
+                      : 'A conexão está demorando para receber os quadros de vídeo. Tente reconectar a transmissão.'}
+                  </p>
+                  {onReconnect && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setStalledWaiting(false)
+                        onReconnect()
+                      }}
+                      className="mt-3 flex cursor-pointer items-center gap-1.5 rounded-md bg-[#5865f2] px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-[#4752c4]"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      Reconectar Transmissão
+                    </button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <div className="mb-2.5 h-7 w-7 animate-spin rounded-full border-2 border-zinc-600 border-t-[#5865f2]" />
+                  <p className="text-xs font-semibold text-zinc-200">
+                    Conectando à tela de {user.username}...
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       )}
 
       {/* Bottom Controls Bar */}

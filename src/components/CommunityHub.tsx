@@ -486,6 +486,9 @@ export function CommunityHub() {
     cinemaPlayers,
     broadcastCinemaState,
     triggerPrank,
+    peerConnectionStates,
+    hasTurnServer,
+    reconnectPeerStream,
     error,
     startScreenShare,
     stopScreenShare,
@@ -1990,6 +1993,17 @@ export function CommunityHub() {
                           : undefined
                       }
                       viewers={getStreamViewers(activeFocusedStream.user.id)}
+                      connectionState={
+                        !activeFocusedStream.isLocal
+                          ? peerConnectionStates[activeFocusedStream.user.id]
+                          : undefined
+                      }
+                      hasTurnServer={hasTurnServer}
+                      onReconnect={
+                        !activeFocusedStream.isLocal
+                          ? () => reconnectPeerStream(activeFocusedStream.user.id)
+                          : undefined
+                      }
                       onToggleFocus={
                         allStreams.length > 1
                           ? () => setFocusedStreamId(null)
@@ -2076,6 +2090,13 @@ export function CommunityHub() {
                       targetFps={item.isLocal && !item.isWebcam ? fps : undefined}
                       targetResolution={item.isLocal && !item.isWebcam ? resolution : undefined}
                       viewers={getStreamViewers(item.user.id)}
+                      connectionState={
+                        !item.isLocal ? peerConnectionStates[item.user.id] : undefined
+                      }
+                      hasTurnServer={hasTurnServer}
+                      onReconnect={
+                        !item.isLocal ? () => reconnectPeerStream(item.user.id) : undefined
+                      }
                       onToggleFocus={() => setFocusedStreamId(item.id)}
                     />
                   ))}
