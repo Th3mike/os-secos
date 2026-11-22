@@ -71,11 +71,20 @@ const cache: MeteredCacheState =
     inFlightCreation: null,
   })
 
+function normalizeMeteredAppName(raw: string): string {
+  return raw
+    .trim()
+    .replace(/^https?:\/\//i, '')
+    .replace(/\.metered\.live.*$/i, '')
+    .replace(/\/.*$/, '')
+}
+
 function getMeteredBaseUrl(): string {
-  const appName = process.env.METERED_APP_NAME?.trim()
-  if (!appName) {
+  const raw = process.env.METERED_APP_NAME?.trim()
+  if (!raw) {
     throw new Error('METERED_APP_NAME environment variable is not set.')
   }
+  const appName = normalizeMeteredAppName(raw)
   return `https://${appName}.metered.live`
 }
 
