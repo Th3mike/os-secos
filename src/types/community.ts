@@ -157,6 +157,7 @@ export interface SignalPayload {
     | 'answer'
     | 'ice-candidate'
     | 'request-stream'
+    | 'request-relay'
     | 'stop-stream'
     | 'stop-webcam'
     | 'speaking-state'
@@ -181,4 +182,7 @@ export interface SignalPayload {
   webcamStreamId?: string | null
   iceRestart?: boolean
   resetConnection?: boolean
+  safeMode?: boolean
+  targetStreamerId?: string
+  relayedStreamMap?: Record<string, { streamerId: string; streamerUser: UserProfile }>
 }

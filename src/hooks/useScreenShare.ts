@@ -16,13 +16,41 @@ import type { RealtimeChannel } from '@supabase/supabase-js'
 const DEFAULT_ICE_SERVERS: RTCConfiguration = {
   iceServers: [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
   ],
-  iceCandidatePoolSize: 4,
+  // max-bundle + rtcpMuxPolicy: require sends audio + video + RTCP over a SINGLE UDP port,
+  // dramatically improving direct P2P NAT traversal on strict home routers without needing TURN!
+  bundlePolicy: 'max-bundle',
+  rtcpMuxPolicy: 'require',
+  iceCandidatePoolSize: 2,
+}
+
+/**
+ * Forces universal VP8 first for compatibility fallback when a viewer's GPU/browser
+ * struggles to decode H.264 hardware frames.
+ */
+function preferSafeVP8Codec(pc: RTCPeerConnection) {
+  try {
+    if (typeof RTCRtpSender === 'undefined' || !RTCRtpSender.getCapabilities) return
+    const caps = RTCRtpSender.getCapabilities('video')
+    if (!caps || !caps.codecs) return
+
+    const vp8Codecs = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/vp8')
+    const otherCodecs = caps.codecs.filter((c) => c.mimeType.toLowerCase() !== 'video/vp8')
+    if (vp8Codecs.length === 0) return
+
+    const ordered = [...vp8Codecs, ...otherCodecs]
+    for (const transceiver of pc.getTransceivers()) {
+      if (
+        transceiver.sender.track?.kind === 'video' &&
+        typeof transceiver.setCodecPreferences === 'function'
+      ) {
+        transceiver.setCodecPreferences(ordered)
+      }
+    }
+  } catch {
+    // Ignore if browser doesn't support setCodecPreferences
+  }
 }
 
 /**
@@ -174,6 +202,7 @@ export interface RemoteStreamItem {
   peerId: string
   user: UserProfile
   stream: MediaStream
+  relayedBy?: string | null
 }
 
 export interface RemoteAudioItem {
@@ -286,11 +315,18 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
   const currentUserRef = useRef<UserProfile | null>(currentUser)
   const roomPeersRef = useRef<UserProfile[]>([])
+  const remoteStreamsRef = useRef<RemoteStreamItem[]>([])
   const iceConfigRef = useRef<RTCConfiguration>(DEFAULT_ICE_SERVERS)
   const localStreamRef = useRef<MediaStream | null>(null)
   const localWebcamStreamRef = useRef<MediaStream | null>(null)
   const peerMediaIdsRef = useRef<
     Map<string, { screenStreamId?: string | null; webcamStreamId?: string | null }>
+  >(new Map())
+  const relayedOfferMetaRef = useRef<
+    Map<string, Record<string, { streamerId: string; streamerUser: UserProfile }>>
+  >(new Map())
+  const outgoingRelayMapRef = useRef<
+    Map<string, Map<string, { stream: MediaStream; streamerUser: UserProfile; senders: RTCRtpSender[] }>>
   >(new Map())
   const shareOptionsRef = useRef<ScreenShareOptions>(loadScreenShareOptions())
   const rawMicStreamRef = useRef<MediaStream | null>(null)
@@ -329,7 +365,9 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         if (!active || !data?.iceServers || data.iceServers.length === 0) return
         iceConfigRef.current = {
           iceServers: data.iceServers,
-          iceCandidatePoolSize: 4,
+          bundlePolicy: 'max-bundle',
+          rtcpMuxPolicy: 'require',
+          iceCandidatePoolSize: 2,
         }
         setHasTurnServer(Boolean(data.hasTurn))
       })
@@ -348,6 +386,10 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   useEffect(() => {
     roomPeersRef.current = roomPeers
   }, [roomPeers])
+
+  useEffect(() => {
+    remoteStreamsRef.current = remoteStreams
+  }, [remoteStreams])
 
   useEffect(() => {
     micEnabledRef.current = micEnabled
@@ -389,6 +431,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     }
     pendingCandidatesRef.current.delete(peerId)
     peerMediaIdsRef.current.delete(peerId)
+    relayedOfferMetaRef.current.delete(peerId)
+    outgoingRelayMapRef.current.delete(peerId)
     setPeerConnectionStates((prev) => {
       if (!prev[peerId]) return prev
       const copy = { ...prev }
@@ -494,16 +538,25 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         if (track.readyState === 'ended') return
         const incomingStream = event.streams[0]
         const mediaIds = peerMediaIdsRef.current.get(targetPeerId)
+        const relayMetaMap = relayedOfferMetaRef.current.get(targetPeerId)
+        const relayInfo = incomingStream && relayMetaMap ? relayMetaMap[incomingStream.id] : undefined
+
+        // Determine whether this stream is a P2P-relayed screen from another streamer (A -> B -> C)
+        const effectivePeerId = relayInfo ? relayInfo.streamerId : targetPeerId
+        const effectiveUser = relayInfo ? relayInfo.streamerUser : targetUser
+        const relayedByName = relayInfo ? targetUser.username : null
 
         if (track.kind === 'video') {
           const isWebcam = Boolean(
-            incomingStream &&
+            !relayInfo &&
+              incomingStream &&
               mediaIds?.webcamStreamId &&
               incomingStream.id === mediaIds.webcamStreamId
           )
 
           // Ignore zombie/stale video transceivers from a previous screen share when we know the active screenStreamId
           if (
+            !relayInfo &&
             !isWebcam &&
             incomingStream &&
             mediaIds?.screenStreamId &&
@@ -521,31 +574,59 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
 
           if (isWebcam) {
             setRemoteWebcams((prev) => {
-              const exists = prev.some((s) => s.peerId === targetPeerId)
+              const exists = prev.some((s) => s.peerId === effectivePeerId)
               if (exists) {
                 return prev.map((s) =>
-                  s.peerId === targetPeerId
-                    ? { peerId: targetPeerId, user: targetUser, stream: freshStream }
+                  s.peerId === effectivePeerId
+                    ? { peerId: effectivePeerId, user: effectiveUser, stream: freshStream }
                     : s
                 )
               }
-              return [...prev, { peerId: targetPeerId, user: targetUser, stream: freshStream }]
+              return [...prev, { peerId: effectivePeerId, user: effectiveUser, stream: freshStream }]
             })
           } else {
             setRemoteStreams((prev) => {
-              const exists = prev.some((s) => s.peerId === targetPeerId)
-              if (!exists && !deafenedRef.current) {
+              const existingItem = prev.find((s) => s.peerId === effectivePeerId)
+              // If we already have a healthy direct (non-relayed) unmuted video track from the streamer, don't overwrite it with a relay
+              if (
+                relayInfo &&
+                existingItem &&
+                !existingItem.relayedBy &&
+                existingItem.stream.getVideoTracks().some((t) => t.readyState === 'live' && !t.muted)
+              ) {
+                return prev
+              }
+              if (!existingItem && !deafenedRef.current) {
                 playRoomEventSound('stream-start')
               }
-              if (exists) {
+              if (existingItem) {
                 return prev.map((s) =>
-                  s.peerId === targetPeerId
-                    ? { peerId: targetPeerId, user: targetUser, stream: freshStream }
+                  s.peerId === effectivePeerId
+                    ? {
+                        peerId: effectivePeerId,
+                        user: effectiveUser,
+                        stream: freshStream,
+                        relayedBy: relayedByName,
+                      }
                     : s
                 )
               }
-              return [...prev, { peerId: targetPeerId, user: targetUser, stream: freshStream }]
+              return [
+                ...prev,
+                {
+                  peerId: effectivePeerId,
+                  user: effectiveUser,
+                  stream: freshStream,
+                  relayedBy: relayedByName,
+                },
+              ]
             })
+            if (relayInfo) {
+              setPeerConnectionStates((prev) => ({
+                ...prev,
+                [effectivePeerId]: 'connected',
+              }))
+            }
           }
 
           track.addEventListener('ended', () => {
@@ -553,7 +634,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
               setRemoteWebcams((prev) =>
                 prev.filter(
                   (item) =>
-                    item.peerId !== targetPeerId ||
+                    item.peerId !== effectivePeerId ||
                     item.stream.getVideoTracks().some((t) => t.id !== track.id && t.readyState !== 'ended')
                 )
               )
@@ -561,7 +642,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
               setRemoteStreams((prev) =>
                 prev.filter(
                   (item) =>
-                    item.peerId !== targetPeerId ||
+                    item.peerId !== effectivePeerId ||
                     item.stream.getVideoTracks().some((t) => t.id !== track.id && t.readyState !== 'ended')
                 )
               )
@@ -569,9 +650,10 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           })
         } else if (track.kind === 'audio') {
           const isScreenAudio = Boolean(
-            incomingStream &&
-              (incomingStream.getVideoTracks().length > 0 ||
-                (mediaIds?.screenStreamId && incomingStream.id === mediaIds.screenStreamId))
+            relayInfo ||
+              (incomingStream &&
+                (incomingStream.getVideoTracks().length > 0 ||
+                  (mediaIds?.screenStreamId && incomingStream.id === mediaIds.screenStreamId)))
           )
 
           if (isScreenAudio && incomingStream) {
@@ -582,7 +664,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             )
             setRemoteStreams((prev) =>
               prev.map((s) =>
-                s.peerId === targetPeerId ? { ...s, stream: combined } : s
+                s.peerId === effectivePeerId ? { ...s, stream: combined } : s
               )
             )
           } else {
@@ -631,7 +713,18 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           to: targetPeerId,
           iceRestart: !forceReset,
           resetConnection: forceReset,
+          safeMode: forceReset,
         })
+
+        // If direct P2P failed and there are other friends in the room, ask a connected peer to bridge the stream (A -> B -> C)!
+        if (forceReset && roomPeersRef.current.length >= 3) {
+          sendSignal({
+            type: 'request-relay',
+            from: curMe.id,
+            fromUser: curMe,
+            targetStreamerId: targetPeerId,
+          })
+        }
       }
 
       pc.onconnectionstatechange = () => {
@@ -718,50 +811,62 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
     }
   }, [])
 
-  const applySenderHighQualityParameters = useCallback(async (pc: RTCPeerConnection) => {
-    const opts = shareOptionsRef.current
-    const activePeerCount = Math.max(1, pcsRef.current.size)
-    const screenMaxBitrate = computePerPeerMaxKbps(opts.resolution, opts.fps, activePeerCount) * 1000
-    const webcamTrackId = localWebcamStreamRef.current?.getVideoTracks()[0]?.id
+  const applySenderHighQualityParameters = useCallback(
+    async (pc: RTCPeerConnection, safeMode = false) => {
+      const opts = shareOptionsRef.current
+      const activePeerCount = Math.max(1, pcsRef.current.size)
+      const screenMaxBitrate = safeMode
+        ? 2_500_000
+        : computePerPeerMaxKbps(opts.resolution, opts.fps, activePeerCount) * 1000
+      const webcamTrackId = localWebcamStreamRef.current?.getVideoTracks()[0]?.id
 
-    preferHardwareH264Codec(pc)
+      if (safeMode) {
+        preferSafeVP8Codec(pc)
+      } else {
+        preferHardwareH264Codec(pc)
+      }
 
-    for (const sender of pc.getSenders()) {
-      if (sender.track && sender.track.kind === 'video') {
-        const isWebcamTrack = Boolean(webcamTrackId && sender.track.id === webcamTrackId)
-        try {
-          const params = sender.getParameters()
-          if (!params.encodings || params.encodings.length === 0) {
-            params.encodings = [{}]
+      for (const sender of pc.getSenders()) {
+        if (sender.track && sender.track.kind === 'video') {
+          const isWebcamTrack = Boolean(webcamTrackId && sender.track.id === webcamTrackId)
+          try {
+            const params = sender.getParameters()
+            if (!params.encodings || params.encodings.length === 0) {
+              params.encodings = [{}]
+            }
+            const webcamMaxBitrate = activePeerCount > 2 ? 2_000_000 : 3_500_000
+            params.encodings[0].maxBitrate = isWebcamTrack ? webcamMaxBitrate : screenMaxBitrate
+            params.encodings[0].maxFramerate = isWebcamTrack ? 60 : safeMode ? 30 : opts.fps
+            params.encodings[0].scaleResolutionDownBy = 1.0
+            params.encodings[0].priority = 'high'
+            params.encodings[0].networkPriority = 'high'
+            ;(params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference =
+              safeMode ? 'balanced' : 'maintain-framerate'
+            await sender.setParameters(params)
+          } catch {
+            // Ignore if browser doesn't support specific encoding param
           }
-          // Webcam gets up to 2.5-4 Mbps @ 60 FPS; Screen Share scales gracefully with peer count
-          const webcamMaxBitrate = activePeerCount > 2 ? 2_000_000 : 3_500_000
-          params.encodings[0].maxBitrate = isWebcamTrack ? webcamMaxBitrate : screenMaxBitrate
-          params.encodings[0].maxFramerate = isWebcamTrack ? 60 : opts.fps
-          params.encodings[0].scaleResolutionDownBy = 1.0
-          params.encodings[0].priority = 'high'
-          params.encodings[0].networkPriority = 'high'
-          ;(params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference =
-            'maintain-framerate'
-          await sender.setParameters(params)
-        } catch {
-          // Ignore if browser doesn't support specific encoding param
         }
       }
-    }
-  }, [])
+    },
+    []
+  )
 
   const syncTracksAndOffer = useCallback(
     async (
       targetPeerId: string,
       targetUser: UserProfile,
-      options?: { iceRestart?: boolean; resetConnection?: boolean }
+      options?: { iceRestart?: boolean; resetConnection?: boolean; safeMode?: boolean }
     ) => {
       const me = currentUserRef.current
       if (!me || targetPeerId === me.id) return
 
+      const peerRelays = outgoingRelayMapRef.current.get(targetPeerId)
       const hasAnyLocalMedia = Boolean(
-        localStreamRef.current || localWebcamStreamRef.current || micStreamRef.current
+        localStreamRef.current ||
+          localWebcamStreamRef.current ||
+          micStreamRef.current ||
+          (peerRelays && peerRelays.size > 0)
       )
       if (!hasAnyLocalMedia && !pcsRef.current.has(targetPeerId)) return
 
@@ -815,7 +920,30 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         })
       }
 
-      await applySenderHighQualityParameters(pc)
+      // Build relayedStreamMap metadata for any P2P-bridged streams we are forwarding to this peer
+      const relayedStreamMap: Record<string, { streamerId: string; streamerUser: UserProfile }> = {}
+      if (peerRelays) {
+        for (const [streamerId, entry] of peerRelays.entries()) {
+          const liveTracks = entry.stream.getTracks().filter((t) => t.readyState !== 'ended')
+          if (liveTracks.length === 0) {
+            peerRelays.delete(streamerId)
+            continue
+          }
+          relayedStreamMap[entry.stream.id] = {
+            streamerId,
+            streamerUser: entry.streamerUser,
+          }
+          liveTracks.forEach((track) => {
+            const alreadyAdded = pc.getSenders().some((s) => s.track?.id === track.id)
+            if (!alreadyAdded) {
+              const sender = pc.addTrack(track, entry.stream)
+              entry.senders.push(sender)
+            }
+          })
+        }
+      }
+
+      await applySenderHighQualityParameters(pc, Boolean(options?.safeMode))
 
       makingOfferRef.current.add(targetPeerId)
       try {
@@ -824,14 +952,16 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         )
         const opts = shareOptionsRef.current
         const peerCount = Math.max(1, pcsRef.current.size)
-        const boostedOffer: RTCSessionDescriptionInit = {
-          type: offer.type,
-          sdp: offer.sdp
-            ? boostSdpVideoBandwidth(offer.sdp, opts.resolution, opts.fps, peerCount)
-            : offer.sdp,
-        }
+        const offerToSet: RTCSessionDescriptionInit = options?.safeMode
+          ? offer
+          : {
+              type: offer.type,
+              sdp: offer.sdp
+                ? boostSdpVideoBandwidth(offer.sdp, opts.resolution, opts.fps, peerCount)
+                : offer.sdp,
+            }
         try {
-          await pc.setLocalDescription(boostedOffer)
+          await pc.setLocalDescription(offerToSet)
         } catch {
           // Fallback to unmodified offer SDP if browser rejects custom bandwidth fmtp
           await pc.setLocalDescription(offer)
@@ -844,6 +974,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           sdp: pc.localDescription!,
           screenStreamId: localStreamRef.current?.id || null,
           webcamStreamId: localWebcamStreamRef.current?.id || null,
+          ...(Object.keys(relayedStreamMap).length > 0 ? { relayedStreamMap } : {}),
         })
       } finally {
         makingOfferRef.current.delete(targetPeerId)
@@ -871,7 +1002,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   }, [enqueuePeerSignal, syncTracksAndOffer])
 
   const reconnectPeerStream = useCallback(
-    (peerId: string) => {
+    (peerId: string, safeMode = false) => {
       const me = currentUserRef.current
       if (!me || peerId === me.id) return
       enqueuePeerSignal(peerId, async () => {
@@ -894,7 +1025,18 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           fromUser: me,
           to: peerId,
           resetConnection: true,
+          safeMode,
         })
+
+        // Also request a P2P bridge from any other friend in the room already seeing this streamer
+        if (roomPeersRef.current.length >= 3) {
+          sendSignal({
+            type: 'request-relay',
+            from: me.id,
+            fromUser: me,
+            targetStreamerId: peerId,
+          })
+        }
       })
     },
     [enqueuePeerSignal, sendSignal]
@@ -975,6 +1117,27 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
           if (!deafenedRef.current) {
             playRoomEventSound('stream-stop')
           }
+          // If we were relaying this streamer's screen to another friend, cleanly stop forwarding it
+          outgoingRelayMapRef.current.forEach((streamerMap, viewerPeerId) => {
+            const entry = streamerMap.get(sig.from)
+            if (entry) {
+              const viewerPc = pcsRef.current.get(viewerPeerId)
+              if (viewerPc) {
+                entry.senders.forEach((sender) => {
+                  try {
+                    viewerPc.removeTrack(sender)
+                  } catch {
+                    // ignore
+                  }
+                })
+              }
+              streamerMap.delete(sig.from)
+              const viewerProfile = roomPeersRef.current.find((p) => p.id === viewerPeerId)
+              if (viewerProfile && viewerPc) {
+                enqueuePeerSignal(viewerPeerId, () => syncTracksAndOffer(viewerPeerId, viewerProfile))
+              }
+            }
+          })
           return
         } else if (sig.type === 'stop-webcam') {
           setRemoteWebcams((prev) => prev.filter((item) => item.peerId !== sig.from))
@@ -1034,6 +1197,7 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
               await syncTracksAndOffer(sig.from, sig.fromUser, {
                 iceRestart: Boolean(sig.iceRestart),
                 resetConnection: Boolean(sig.resetConnection),
+                safeMode: Boolean(sig.safeMode),
               })
             }
             if (watchStateRef.current) {
@@ -1071,12 +1235,55 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
                 cinemaPlayer: myCinemaPlayerRef.current,
               })
             }
+          } else if (sig.type === 'request-relay' && sig.targetStreamerId) {
+            // Pure P2P Amigo-Ponte (A -> B -> C): if we are receiving the target streamer's
+            // live unmuted video directly, forward their stream to the blocked peer over P2P!
+            const targetStreamerId = sig.targetStreamerId
+            if (targetStreamerId === activeMe.id || sig.from === activeMe.id) return
+
+            const sourceItem = remoteStreamsRef.current.find(
+              (item) =>
+                item.peerId === targetStreamerId &&
+                !item.relayedBy &&
+                item.stream.getVideoTracks().some((t) => t.readyState === 'live' && !t.muted)
+            )
+            if (!sourceItem) return
+
+            // Elect a single deterministic bridge peer (lowest peerId among candidates other than streamer & requester)
+            // so multiple friends don't flood the requester at the same time.
+            const candidateIds = roomPeersRef.current
+              .map((p) => p.id)
+              .filter((id) => id !== targetStreamerId && id !== sig.from)
+              .sort()
+            const myRank = candidateIds.indexOf(activeMe.id)
+            if (myRank > 0) {
+              await new Promise((r) => setTimeout(r, Math.min(myRank * 1800, 4000)))
+            }
+
+            let viewerRelays = outgoingRelayMapRef.current.get(sig.from)
+            if (!viewerRelays) {
+              viewerRelays = new Map()
+              outgoingRelayMapRef.current.set(sig.from, viewerRelays)
+            }
+            // Reuse existing live tracks inside a dedicated relay MediaStream
+            const relayStream = new MediaStream(
+              sourceItem.stream.getTracks().filter((t) => t.readyState !== 'ended')
+            )
+            viewerRelays.set(targetStreamerId, {
+              stream: relayStream,
+              streamerUser: sourceItem.user,
+              senders: [],
+            })
+            await syncTracksAndOffer(sig.from, sig.fromUser, { safeMode: true })
           } else if (sig.type === 'offer' && sig.sdp) {
             if (sig.screenStreamId !== undefined || sig.webcamStreamId !== undefined) {
               peerMediaIdsRef.current.set(sig.from, {
                 screenStreamId: sig.screenStreamId,
                 webcamStreamId: sig.webcamStreamId,
               })
+            }
+            if (sig.relayedStreamMap) {
+              relayedOfferMetaRef.current.set(sig.from, sig.relayedStreamMap)
             }
             const pc = getOrCreatePeerConnection(sig.from, sig.fromUser)
             if (!pc) return
@@ -1212,6 +1419,8 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
       pcsMap.clear()
       pendingCandidatesRef.current.clear()
       peerMediaIdsRef.current.clear()
+      relayedOfferMetaRef.current.clear()
+      outgoingRelayMapRef.current.clear()
       setPeerConnectionStates({})
       setRemoteStreams([])
       setRemoteWebcams([])

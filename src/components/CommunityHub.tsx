@@ -487,7 +487,6 @@ export function CommunityHub() {
     broadcastCinemaState,
     triggerPrank,
     peerConnectionStates,
-    hasTurnServer,
     reconnectPeerStream,
     error,
     startScreenShare,
@@ -860,10 +859,10 @@ export function CommunityHub() {
 
   const allStreams = [
     ...(localStream && user
-      ? [{ id: 'local-screen', user, stream: localStream, isLocal: true, isWebcam: false }]
+      ? [{ id: 'local-screen', user, stream: localStream, isLocal: true, isWebcam: false, relayedBy: null as string | null }]
       : []),
     ...(localWebcamStream && user
-      ? [{ id: 'local-webcam', user, stream: localWebcamStream, isLocal: true, isWebcam: true }]
+      ? [{ id: 'local-webcam', user, stream: localWebcamStream, isLocal: true, isWebcam: true, relayedBy: null as string | null }]
       : []),
     ...remoteStreams.map((r) => ({
       id: `screen-${r.peerId}`,
@@ -871,6 +870,7 @@ export function CommunityHub() {
       stream: r.stream,
       isLocal: false,
       isWebcam: false,
+      relayedBy: r.relayedBy || null,
     })),
     ...remoteWebcams.map((w) => ({
       id: `webcam-${w.peerId}`,
@@ -878,6 +878,7 @@ export function CommunityHub() {
       stream: w.stream,
       isLocal: false,
       isWebcam: true,
+      relayedBy: null as string | null,
     })),
   ]
 
@@ -1998,10 +1999,10 @@ export function CommunityHub() {
                           ? peerConnectionStates[activeFocusedStream.user.id]
                           : undefined
                       }
-                      hasTurnServer={hasTurnServer}
+                      relayedBy={activeFocusedStream.relayedBy}
                       onReconnect={
                         !activeFocusedStream.isLocal
-                          ? () => reconnectPeerStream(activeFocusedStream.user.id)
+                          ? (safeMode) => reconnectPeerStream(activeFocusedStream.user.id, safeMode)
                           : undefined
                       }
                       onToggleFocus={
@@ -2093,9 +2094,11 @@ export function CommunityHub() {
                       connectionState={
                         !item.isLocal ? peerConnectionStates[item.user.id] : undefined
                       }
-                      hasTurnServer={hasTurnServer}
+                      relayedBy={item.relayedBy}
                       onReconnect={
-                        !item.isLocal ? () => reconnectPeerStream(item.user.id) : undefined
+                        !item.isLocal
+                          ? (safeMode) => reconnectPeerStream(item.user.id, safeMode)
+                          : undefined
                       }
                       onToggleFocus={() => setFocusedStreamId(item.id)}
                     />

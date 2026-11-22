@@ -15,8 +15,8 @@ interface VideoStageProps {
   targetResolution?: '720p' | '1080p' | '1440p'
   viewers?: UserProfile[]
   connectionState?: RTCPeerConnectionState
-  hasTurnServer?: boolean
-  onReconnect?: () => void
+  relayedBy?: string | null
+  onReconnect?: (safeMode?: boolean) => void
   onToggleFocus?: () => void
 }
 
@@ -31,7 +31,7 @@ export function VideoStage({
   targetResolution,
   viewers = [],
   connectionState,
-  hasTurnServer = false,
+  relayedBy = null,
   onReconnect,
   onToggleFocus,
 }: VideoStageProps) {
@@ -124,18 +124,34 @@ export function VideoStage({
       t.addEventListener('unmute', handleFrameReady)
     })
 
-    // If a remote stream still has 0x0 video frames after 4 seconds, surface reconnect controls
+    // Safety net: while waiting for first video frame on a remote stream, verify videoWidth periodically
+    // (only touches DOM properties, never getSettings()) and surface reconnect controls after 4s
     let stallTimer: ReturnType<typeof setTimeout> | null = null
+    let framePollTimer: ReturnType<typeof setInterval> | null = null
     if (!isLocal && (videoEl.videoWidth === 0 || videoEl.videoHeight === 0)) {
+      framePollTimer = setInterval(() => {
+        if (!videoRef.current) return
+        if (videoRef.current.videoWidth > 0 && videoRef.current.videoHeight > 0) {
+          updateMetadataStats()
+          if (framePollTimer) {
+            clearInterval(framePollTimer)
+            framePollTimer = null
+          }
+        } else if (videoRef.current.paused) {
+          ensurePlay()
+        }
+      }, 1000)
+
       stallTimer = setTimeout(() => {
         if (videoRef.current && (videoRef.current.videoWidth === 0 || videoRef.current.videoHeight === 0)) {
           setStalledWaiting(true)
         }
-      }, 4000)
+      }, 4500)
     }
 
     return () => {
       if (stallTimer) clearTimeout(stallTimer)
+      if (framePollTimer) clearInterval(framePollTimer)
       videoEl.removeEventListener('loadedmetadata', handleFrameReady)
       videoEl.removeEventListener('loadeddata', handleFrameReady)
       videoEl.removeEventListener('canplay', handleFrameReady)
@@ -213,6 +229,14 @@ export function VideoStage({
           {liveStats.height > 0 && (
             <span className="rounded bg-[#2b2d31] px-1.5 py-0.5 text-[10px] font-extrabold text-emerald-400">
               {liveStats.height}p {liveStats.fps > 0 ? `${liveStats.fps} FPS` : ''}
+            </span>
+          )}
+          {relayedBy && (
+            <span
+              className="rounded bg-indigo-600/80 px-1.5 py-0.5 text-[10px] font-bold text-white"
+              title={`Recebendo via ponte P2P de ${relayedBy}`}
+            >
+              Ponte: {relayedBy}
             </span>
           )}
         </div>
@@ -341,27 +365,44 @@ export function VideoStage({
                   <WifiOff className="mb-2 h-8 w-8 text-amber-400" />
                   <p className="text-sm font-bold text-white">
                     {connectionState === 'failed'
-                      ? 'Falha ao receber o vídeo (bloqueio de rede/NAT)'
+                      ? `Conexão direta bloqueada com ${user.username}`
                       : `Aguardando vídeo de ${user.username}...`}
                   </p>
                   <p className="mt-1 max-w-sm text-xs text-zinc-400">
-                    {!hasTurnServer
-                      ? 'A conexão direta P2P pode estar sendo bloqueada por CGNAT/NAT simétrico. Tente reconectar ou configure um servidor TURN.'
-                      : 'A conexão está demorando para receber os quadros de vídeo. Tente reconectar a transmissão.'}
+                    {connectionState === 'connected'
+                      ? 'Conectado, aguardando decodificação do vídeo. Tente o Modo Compatível (VP8).'
+                      : 'Tentando estabelecer rota P2P direta (ou ponte via outro amigo da sala).'}
                   </p>
+                  <span className="mt-1.5 rounded bg-[#1e1f22] px-2 py-0.5 font-mono text-[10px] text-zinc-400">
+                    WebRTC: {connectionState || 'connecting'}
+                  </span>
                   {onReconnect && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        setStalledWaiting(false)
-                        onReconnect()
-                      }}
-                      className="mt-3 flex cursor-pointer items-center gap-1.5 rounded-md bg-[#5865f2] px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-[#4752c4]"
-                    >
-                      <RefreshCw className="h-3.5 w-3.5" />
-                      Reconectar Transmissão
-                    </button>
+                    <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setStalledWaiting(false)
+                          onReconnect(false)
+                        }}
+                        className="flex cursor-pointer items-center gap-1.5 rounded-md bg-[#5865f2] px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-[#4752c4]"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" />
+                        Reconectar
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          setStalledWaiting(false)
+                          onReconnect(true)
+                        }}
+                        className="flex cursor-pointer items-center gap-1.5 rounded-md bg-[#2b2d31] px-3 py-1.5 text-xs font-bold text-zinc-200 transition hover:bg-[#35373c] hover:text-white"
+                        title="Reconecta usando codec VP8 universal (compatível com todos os navegadores e GPUs)"
+                      >
+                        Modo Compatível (VP8)
+                      </button>
+                    </div>
                   )}
                 </>
               ) : (
