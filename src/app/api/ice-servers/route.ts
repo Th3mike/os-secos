@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { getMeteredIceServers, isMeteredConfigured } from '@/lib/meteredTurn'
 
 const DEFAULT_STUN_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -11,8 +12,32 @@ const DEFAULT_STUN_SERVERS: RTCIceServer[] = [
 
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  // 1. Cloudflare Calls TURN (1 TB/month free tier — generates short-lived credentials securely)
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url)
+  const region = searchParams.get('region') || undefined
+
+  // 1. Metered.ca TURN (supports dynamic 24h credentials via METERED_SECRET_KEY or static METERED_API_KEY)
+  if (isMeteredConfigured()) {
+    try {
+      const result = await getMeteredIceServers(region)
+      if (result.iceServers.length > 0) {
+        return NextResponse.json(
+          {
+            iceServers: [...DEFAULT_STUN_SERVERS, ...result.iceServers],
+            hasTurn: true,
+            provider: 'metered',
+            ...(result.expiresAt ? { expiresAt: result.expiresAt } : {}),
+            ...(result.propagating !== undefined ? { propagating: result.propagating } : {}),
+          },
+          { headers: { 'Cache-Control': 'no-store' } }
+        )
+      }
+    } catch (err) {
+      console.error('Failed to fetch Metered TURN ICE servers:', err)
+    }
+  }
+
+  // 2. Cloudflare Calls TURN (1 TB/month free tier — generates short-lived credentials securely)
   const cfTokenId = process.env.CLOUDFLARE_TURN_TOKEN_ID
   const cfApiToken = process.env.CLOUDFLARE_TURN_API_TOKEN
 
@@ -39,37 +64,13 @@ export async function GET() {
             : []
         if (turnServers.length > 0) {
           return NextResponse.json(
-            { iceServers: [...DEFAULT_STUN_SERVERS, ...turnServers], hasTurn: true },
+            { iceServers: [...DEFAULT_STUN_SERVERS, ...turnServers], hasTurn: true, provider: 'cloudflare' },
             { headers: { 'Cache-Control': 'no-store' } }
           )
         }
       }
     } catch (err) {
       console.error('Failed to fetch Cloudflare TURN credentials:', err)
-    }
-  }
-
-  // 2. Metered.ca TURN (free tier supported)
-  const meteredApp = process.env.METERED_APP_NAME
-  const meteredKey = process.env.METERED_API_KEY
-
-  if (meteredApp && meteredKey) {
-    try {
-      const res = await fetch(
-        `https://${meteredApp}.metered.live/api/v1/turn/credentials?apiKey=${encodeURIComponent(meteredKey)}`,
-        { cache: 'no-store' }
-      )
-      if (res.ok) {
-        const data = (await res.json()) as RTCIceServer[]
-        if (Array.isArray(data) && data.length > 0) {
-          return NextResponse.json(
-            { iceServers: [...DEFAULT_STUN_SERVERS, ...data], hasTurn: true },
-            { headers: { 'Cache-Control': 'no-store' } }
-          )
-        }
-      }
-    } catch (err) {
-      console.error('Failed to fetch Metered TURN credentials:', err)
     }
   }
 
@@ -90,14 +91,14 @@ export async function GET() {
         ...(turnCredential ? { credential: turnCredential } : {}),
       }
       return NextResponse.json(
-        { iceServers: [...DEFAULT_STUN_SERVERS, customTurn], hasTurn: true },
+        { iceServers: [...DEFAULT_STUN_SERVERS, customTurn], hasTurn: true, provider: 'custom' },
         { headers: { 'Cache-Control': 'no-store' } }
       )
     }
   }
 
   return NextResponse.json(
-    { iceServers: DEFAULT_STUN_SERVERS, hasTurn: false },
+    { iceServers: DEFAULT_STUN_SERVERS, hasTurn: false, provider: 'stun-only' },
     { headers: { 'Cache-Control': 'no-store' } }
   )
 }
