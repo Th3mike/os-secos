@@ -26,64 +26,24 @@ const DEFAULT_ICE_SERVERS: RTCConfiguration = {
 }
 
 /**
- * Forces universal VP8 first for compatibility fallback when a viewer's GPU/browser
- * struggles to decode H.264 hardware frames.
+ * Prefers universal VP8 first (followed by VP9 and other codecs).
+ * VP8 works reliably across every browser and GPU without H.264 hardware-decode black screens.
  */
-function preferSafeVP8Codec(pc: RTCPeerConnection) {
+function preferUniversalVP8Codec(pc: RTCPeerConnection) {
   try {
     if (typeof RTCRtpSender === 'undefined' || !RTCRtpSender.getCapabilities) return
     const caps = RTCRtpSender.getCapabilities('video')
     if (!caps || !caps.codecs) return
 
     const vp8Codecs = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/vp8')
-    const otherCodecs = caps.codecs.filter((c) => c.mimeType.toLowerCase() !== 'video/vp8')
-    if (vp8Codecs.length === 0) return
-
-    const ordered = [...vp8Codecs, ...otherCodecs]
-    for (const transceiver of pc.getTransceivers()) {
-      if (
-        transceiver.sender.track?.kind === 'video' &&
-        typeof transceiver.setCodecPreferences === 'function'
-      ) {
-        transceiver.setCodecPreferences(ordered)
-      }
-    }
-  } catch {
-    // Ignore if browser doesn't support setCodecPreferences
-  }
-}
-
-/**
- * Prefers universally decodable H.264 Constrained Baseline (profile 42e01f) first,
- * followed by VP9/VP8 and other H.264 profiles.
- * Avoids forcing High Profile H.264 (640c1f/640032) ahead of compatible codecs,
- * which causes black screens on Firefox / older Intel & AMD GPUs.
- */
-function preferHardwareH264Codec(pc: RTCPeerConnection) {
-  try {
-    if (typeof RTCRtpSender === 'undefined' || !RTCRtpSender.getCapabilities) return
-    const caps = RTCRtpSender.getCapabilities('video')
-    if (!caps || !caps.codecs) return
-
-    const baselineH264 = caps.codecs.filter(
-      (c) =>
-        c.mimeType.toLowerCase() === 'video/h264' &&
-        (c.sdpFmtpLine?.toLowerCase().includes('profile-level-id=42e01f') ||
-          c.sdpFmtpLine?.toLowerCase().includes('profile-level-id=42001f'))
-    )
-    const otherH264 = caps.codecs.filter(
-      (c) => c.mimeType.toLowerCase() === 'video/h264' && !baselineH264.includes(c)
-    )
     const vp9Codecs = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/vp9')
-    const vp8Codecs = caps.codecs.filter((c) => c.mimeType.toLowerCase() === 'video/vp8')
     const otherCodecs = caps.codecs.filter((c) => {
       const m = c.mimeType.toLowerCase()
-      return m !== 'video/h264' && m !== 'video/vp9' && m !== 'video/vp8'
+      return m !== 'video/vp8' && m !== 'video/vp9'
     })
+    if (vp8Codecs.length === 0) return
 
-    if (baselineH264.length === 0 && otherH264.length === 0) return
-
-    const ordered = [...baselineH264, ...vp9Codecs, ...vp8Codecs, ...otherH264, ...otherCodecs]
+    const ordered = [...vp8Codecs, ...vp9Codecs, ...otherCodecs]
     for (const transceiver of pc.getTransceivers()) {
       if (
         transceiver.sender.track?.kind === 'video' &&
@@ -105,97 +65,20 @@ function computePerPeerMaxKbps(
   const singlePeerMaxKbps =
     resolution === '1440p'
       ? fps === 120
-        ? 12000
-        : 9000
+        ? 9000
+        : 7000
       : resolution === '1080p'
         ? fps === 120
-          ? 8500
-          : 6000
-        : 4000
+          ? 6500
+          : 4500
+        : 3000
 
   const count = Math.max(1, peerCount)
   if (count === 1) return singlePeerMaxKbps
   // Full-mesh P2P sends one stream per peer: share upload budget cleanly so
-  // 2nd/3rd viewers never suffer keyframe packet loss (black screen)!
-  const totalUploadBudgetKbps = 14000
+  // multiple viewers stay smooth without dropping keyframes!
+  const totalUploadBudgetKbps = 12000
   return Math.max(1500, Math.min(singlePeerMaxKbps, Math.round(totalUploadBudgetKbps / count)))
-}
-
-/**
- * Safely boosts WebRTC SDP video bandwidth ONLY on real video codec fmtp lines
- * (VP8/VP9/H264/AV1) — NEVER touching RTX (`apt=`), RED, or ULPFEC lines, which
- * would otherwise break packet retransmission or cause setRemoteDescription to fail!
- */
-function boostSdpVideoBandwidth(
-  sdp: string,
-  resolution: '720p' | '1080p' | '1440p',
-  fps: number,
-  peerCount = 1
-): string {
-  const maxKbps = computePerPeerMaxKbps(resolution, fps, peerCount)
-  const startKbps = Math.min(2500, Math.round(maxKbps * 0.45))
-  const minKbps = 300
-
-  const lines = sdp.split('\r\n')
-  // First pass: identify payload types of actual video codecs (exclude rtx, red, ulpfec, flexfec)
-  const videoCodecPts = new Set<string>()
-  let inVideoScan = false
-  for (const line of lines) {
-    if (line.startsWith('m=video')) {
-      inVideoScan = true
-    } else if (line.startsWith('m=')) {
-      inVideoScan = false
-    } else if (inVideoScan && line.startsWith('a=rtpmap:')) {
-      const match = /^a=rtpmap:(\d+)\s+([a-zA-Z0-9_-]+)\//.exec(line)
-      if (match) {
-        const pt = match[1]
-        const codec = match[2].toLowerCase()
-        if (codec === 'h264' || codec === 'vp8' || codec === 'vp9' || codec === 'av1') {
-          videoCodecPts.add(pt)
-        }
-      }
-    }
-  }
-
-  const out: string[] = []
-  let inVideo = false
-  let bandwidthAdded = false
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]
-    if (line.startsWith('m=video')) {
-      inVideo = true
-      bandwidthAdded = false
-    } else if (line.startsWith('m=')) {
-      inVideo = false
-    }
-
-    // Replace existing b=AS in video section rather than duplicating it
-    if (inVideo && line.startsWith('b=AS:')) {
-      if (!bandwidthAdded) {
-        out.push(`b=AS:${maxKbps}`)
-        bandwidthAdded = true
-      }
-      continue
-    }
-
-    out.push(line)
-
-    if (inVideo && !bandwidthAdded && line.startsWith('c=IN')) {
-      out.push(`b=AS:${maxKbps}`)
-      bandwidthAdded = true
-    }
-
-    if (inVideo && line.startsWith('a=fmtp:') && !line.includes('x-google-max-bitrate')) {
-      const fmtpMatch = /^a=fmtp:(\d+)\s+(.+)$/.exec(line)
-      if (fmtpMatch && videoCodecPts.has(fmtpMatch[1]) && !fmtpMatch[2].includes('apt=')) {
-        out[out.length - 1] =
-          `${line};x-google-min-bitrate=${minKbps};x-google-start-bitrate=${startKbps};x-google-max-bitrate=${maxKbps}`
-      }
-    }
-  }
-
-  return out.join('\r\n')
 }
 
 export interface RemoteStreamItem {
@@ -812,19 +695,15 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
   }, [])
 
   const applySenderHighQualityParameters = useCallback(
-    async (pc: RTCPeerConnection, safeMode = false) => {
+    async (pc: RTCPeerConnection) => {
       const opts = shareOptionsRef.current
       const activePeerCount = Math.max(1, pcsRef.current.size)
-      const screenMaxBitrate = safeMode
-        ? 2_500_000
-        : computePerPeerMaxKbps(opts.resolution, opts.fps, activePeerCount) * 1000
+      const screenMaxBitrate =
+        computePerPeerMaxKbps(opts.resolution, opts.fps, activePeerCount) * 1000
       const webcamTrackId = localWebcamStreamRef.current?.getVideoTracks()[0]?.id
 
-      if (safeMode) {
-        preferSafeVP8Codec(pc)
-      } else {
-        preferHardwareH264Codec(pc)
-      }
+      // Always prefer universal VP8 so every browser & GPU decodes smoothly with zero black screens
+      preferUniversalVP8Codec(pc)
 
       for (const sender of pc.getSenders()) {
         if (sender.track && sender.track.kind === 'video') {
@@ -834,14 +713,14 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
             if (!params.encodings || params.encodings.length === 0) {
               params.encodings = [{}]
             }
-            const webcamMaxBitrate = activePeerCount > 2 ? 2_000_000 : 3_500_000
+            const webcamMaxBitrate = activePeerCount > 2 ? 2_000_000 : 3_000_000
             params.encodings[0].maxBitrate = isWebcamTrack ? webcamMaxBitrate : screenMaxBitrate
-            params.encodings[0].maxFramerate = isWebcamTrack ? 60 : safeMode ? 30 : opts.fps
+            params.encodings[0].maxFramerate = isWebcamTrack ? 60 : opts.fps
             params.encodings[0].scaleResolutionDownBy = 1.0
             params.encodings[0].priority = 'high'
             params.encodings[0].networkPriority = 'high'
             ;(params as RTCRtpSendParameters & { degradationPreference?: string }).degradationPreference =
-              safeMode ? 'balanced' : 'maintain-framerate'
+              'balanced'
             await sender.setParameters(params)
           } catch {
             // Ignore if browser doesn't support specific encoding param
@@ -943,29 +822,15 @@ export function useScreenShare(roomId: string, currentUser: UserProfile | null) 
         }
       }
 
-      await applySenderHighQualityParameters(pc, Boolean(options?.safeMode))
+      await applySenderHighQualityParameters(pc)
 
       makingOfferRef.current.add(targetPeerId)
       try {
+        // Send clean, unmodified browser-native SDP (VP8 preferred via setCodecPreferences)
         const offer = await pc.createOffer(
           options?.iceRestart ? { iceRestart: true } : undefined
         )
-        const opts = shareOptionsRef.current
-        const peerCount = Math.max(1, pcsRef.current.size)
-        const offerToSet: RTCSessionDescriptionInit = options?.safeMode
-          ? offer
-          : {
-              type: offer.type,
-              sdp: offer.sdp
-                ? boostSdpVideoBandwidth(offer.sdp, opts.resolution, opts.fps, peerCount)
-                : offer.sdp,
-            }
-        try {
-          await pc.setLocalDescription(offerToSet)
-        } catch {
-          // Fallback to unmodified offer SDP if browser rejects custom bandwidth fmtp
-          await pc.setLocalDescription(offer)
-        }
+        await pc.setLocalDescription(offer)
         sendSignal({
           type: 'offer',
           from: me.id,

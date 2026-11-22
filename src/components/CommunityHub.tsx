@@ -2002,7 +2002,7 @@ export function CommunityHub() {
                       relayedBy={activeFocusedStream.relayedBy}
                       onReconnect={
                         !activeFocusedStream.isLocal
-                          ? (safeMode) => reconnectPeerStream(activeFocusedStream.user.id, safeMode)
+                          ? () => reconnectPeerStream(activeFocusedStream.user.id, true)
                           : undefined
                       }
                       onToggleFocus={
@@ -2097,7 +2097,7 @@ export function CommunityHub() {
                       relayedBy={item.relayedBy}
                       onReconnect={
                         !item.isLocal
-                          ? (safeMode) => reconnectPeerStream(item.user.id, safeMode)
+                          ? () => reconnectPeerStream(item.user.id, true)
                           : undefined
                       }
                       onToggleFocus={() => setFocusedStreamId(item.id)}
@@ -2708,7 +2708,7 @@ export function CommunityHub() {
                     Qualidade da Transmissão
                   </span>
                   <span className="text-[11px] font-bold text-emerald-400">
-                    Codec Hardware H.264 Ativo
+                    Codec Universal VP8 Ativo
                   </span>
                 </div>
 
